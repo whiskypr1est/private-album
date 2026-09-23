@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">私有相册</string>
+
+    <!-- 登录 / 服务器配置 -->
+    <string name="login_title">连接私有相册</string>
+    <string name="login_subtitle">照片保存在你自己的树莓派上，只有你和你信任的网络能访问。</string>
+    <string name="hint_server">服务器地址</string>
+    <string name="hint_port">端口</string>
+    <string name="hint_username">账号</string>
+    <string name="hint_password">密码</string>
+    <string name="action_test">测试连接</string>
+    <string name="action_login">登录</string>
+    <string name="action_setup">初始化服务（首次使用）</string>
+    <string name="login_testing">正在连接…</string>
+    <string name="login_ok">连接成功</string>
+    <string name="login_failed">连接失败</string>
+
+    <!-- 主界面 -->
+    <string name="tab_timeline">照片</string>
+    <string name="tab_albums">相册</string>
+    <string name="tab_favorites">收藏</string>
+    <string name="tab_more">更多</string>
+    <string name="action_upload">上传</string>
+    <string name="action_search">搜索</string>
+    <string name="action_refresh">刷新</string>
+    <string name="action_select_all">全选</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_delete">删除</string>
+    <string name="action_favorite">收藏</string>
+    <string name="action_unfavorite">取消收藏</string>
+    <string name="action_add_to_album">加入相册</string>
+    <string name="action_save_to_phone">保存到手机</string>
+    <string name="action_share">分享</string>
+    <string name="action_edit">编辑</string>
+    <string name="action_info">详情</string>
+    <string name="action_archive">归档</string>
+    <string name="empty_library">还没有照片\n点右下角「+」上传第一张</string>
+    <string name="empty_favorites">还没有收藏</string>
+    <string name="empty_albums">还没有相册</string>
+    <string name="selected_count">已选 %1$d 项</string>
+
+    <!-- 查看器 -->
+    <string name="viewer_delete_confirm">确定要删除这张吗？删除后可在「更多 → 回收站」中恢复。</string>
+
+    <!-- 编辑 -->
+    <string name="edit_title">编辑照片</string>
+    <string name="edit_rotate_left">左转</string>
+    <string name="edit_rotate_right">右转</string>
+    <string name="edit_crop">裁剪</string>
+    <string name="edit_filter">滤镜</string>
+    <string name="edit_adjust">调整</string>
+    <string name="edit_brightness">亮度</string>
+    <string name="edit_contrast">对比度</string>
+    <string name="edit_saturation">饱和度</string>
+    <string name="edit_flip_h">水平翻转</string>
+    <string name="edit_flip_v">垂直翻转</string>
+    <string name="edit_reset">重置</string>
+    <string name="edit_save">保存</string>
+    <string name="edit_saving">正在保存…</string>
+    <string name="edit_saved">已保存</string>
+    <string name="edit_keep_original">保留原图副本</string>
+
+    <!-- 上传 -->
+    <string name="upload_title">上传到树莓派</string>
+    <string name="upload_started">开始上传 %1$d 个文件</string>
+    <string name="upload_done">上传完成：%1$d 个</string>
+    <string name="upload_failed">上传失败：%1$s</string>
+
+    <!-- 设置 -->
+    <string name="settings_title">更多</string>
+    <string name="settings_server">服务器与账号</string>
+    <string name="settings_storage">存储与相册管理</string>
+    <string name="settings_media_root">媒体根目录</string>
+    <string name="settings_migrate">迁移到外接硬盘</string>
+    <string name="settings_trash">回收站</string>
+    <string name="settings_scan">重新扫描媒体库</string>
+    <string name="settings_rebuild_thumbs">重建缩略图</string>
+    <string name="settings_stats">存储用量</string>
+    <string name="settings_logout">退出登录</string>
+    <string name="settings_cache">清理本地缓存</string>
+    <string name="settings_about">关于</string>
+    <string name="settings_change_password">修改密码</string>
+</resources>

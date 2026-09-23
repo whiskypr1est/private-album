@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  家里自建的相册服务只跑在局域网 / Tailscale 内网，使用明文 HTTP。
+  如需公网 HTTPS，可换成 TrustManager 版本；这里显式放行明文流量。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

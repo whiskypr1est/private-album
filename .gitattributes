@@ -1,0 +1,7 @@
+# Normalise line endings: every text file in this project is LF.
+# (Windows checkouts / copies must not introduce CRLF into Python or shell scripts.)
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jks binary
+*.keystore binary

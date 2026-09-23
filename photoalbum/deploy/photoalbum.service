@@ -1,0 +1,32 @@
+[Unit]
+Description=Private Photo Album (FastAPI) for Raspberry Pi
+Documentation=file:///home/cabbage/photoalbum/README.md
+After=network-online.target tailscaled.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=cabbage
+Group=cabbage
+WorkingDirectory=/home/cabbage/photoalbum/server/app
+Environment=PYTHONUNBUFFERED=1
+Environment=PHOTOALBUM_HOME=/home/cabbage/photoalbum
+Environment=PHOTOALBUM_DATA_DIR=/home/cabbage/photoalbum/data
+Environment=PHOTOALBUM_LOG_DIR=/home/cabbage/photoalbum/logs
+Environment=PHOTOALBUM_TZ=Asia/Shanghai
+ExecStart=/home/cabbage/photoalbum/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --timeout-keep-alive 75 --no-access-log
+Restart=always
+RestartSec=5
+# Photo indexing is I/O bound; keep it friendly to the SD card.
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=5
+StandardOutput=append:/home/cabbage/photoalbum/logs/service.log
+StandardError=append:/home/cabbage/photoalbum/logs/service.log
+NoNewPrivileges=true
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target

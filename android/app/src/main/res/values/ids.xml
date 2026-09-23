@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 自检页用的滚动容器 id（不在布局 XML 里，运行时构造视图） -->
+    <item name="selftest_scroll" type="id" />
+</resources>
