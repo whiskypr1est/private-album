@@ -121,4 +121,17 @@
     <string name="album_photos_section">照片</string>
     <string name="album_photos_empty_hint">还没有照片，点右下角「+」上传</string>
     <string name="subalbum_created">已新建子相册「%1$s」</string>
+
+    <!-- 显示方式切换 -->
+    <string name="action_view_mode">切换显示方式</string>
+    <string name="view_mode_grid_n">每行 %1$d 张</string>
+    <string name="view_mode_list">列表</string>
+
+    <!-- 上传时的排序方式 -->
+    <string name="upload_sort_title">这批照片怎么排序？</string>
+    <string name="upload_sort_by_name">按文件名自动排序</string>
+    <string name="upload_sort_by_name_hint">1、2、3、10、20（不管在文件夹里是什么顺序）</string>
+    <string name="upload_sort_by_source">保留源文件夹顺序</string>
+    <string name="upload_sort_by_source_hint">按扫描/选择时出现的先后，文件名不参与排序</string>
+    <string name="upload_sort_chosen">排序方式：%1$s</string>
 </resources>

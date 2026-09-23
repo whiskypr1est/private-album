@@ -159,6 +159,7 @@ def upsert_asset(
     compute_sha: bool = False,
     client_mtime: str | None = None,
     upload_batch: str | None = None,
+    sort_order: int | None = None,
 ) -> int | None:
     """Insert or refresh one file. Returns the asset id (None if not media)."""
     rel = rel_path or rel_for(path)
@@ -221,10 +222,26 @@ def upsert_asset(
         gps_lat=exif.get("gps_lat"),
         gps_lon=exif.get("gps_lon"),
         orientation=exif.get("orientation"),
-        # 自然排序键：由文件名算出来，保证 1.png < 2.png < 10.png
-        name_sort_key=natural_sort_key(path.name),
         updated_at=timestamp,
     )
+
+    # 排序键的三种情况（这里最容易出错，别简化）：
+    #   1. 本次上传明确要求「保留源顺序」 -> 用序号，并打上锁
+    #   2. 已有行带着锁（之前选过源顺序）  -> 原样保留，绝不能被文件名重算冲掉，
+    #      否则一次重扫就把用户选的顺序毁了
+    #   3. 其它情况 -> 按文件名算自然排序键（1.png < 2.png < 10.png）
+    already_locked = bool(existing["sort_key_locked"]) if (
+        existing is not None and "sort_key_locked" in existing.keys()
+    ) else False
+    if sort_order is not None:
+        fields["name_sort_key"] = explicit_sort_key(sort_order)
+        fields["sort_key_locked"] = 1
+    elif already_locked:
+        fields["name_sort_key"] = existing["name_sort_key"]
+        fields["sort_key_locked"] = 1
+    else:
+        fields["name_sort_key"] = natural_sort_key(path.name)
+
     if upload_batch:
         # 只在本次上传明确了批次时才写，避免扫描/编辑把已有批次覆盖掉
         fields["upload_batch"] = upload_batch
@@ -258,6 +275,19 @@ def upsert_asset(
     return asset_id
 
 
+def explicit_sort_key(index: int) -> str:
+    """「保留源文件夹顺序」时用的排序键。
+
+    前缀 ~ 只是为了让它在库里一眼能认出来是人指定的顺序，不是文件名算出来的。
+    补零到 12 位，保证字典序等于数字序（和 natural_sort_key 同一套宽度）。
+    """
+    try:
+        n = max(0, int(index))
+    except (TypeError, ValueError):
+        n = 0
+    return f"~{n:012d}"
+
+
 def backfill_sort_keys() -> int:
     """把老数据里不正确的 name_sort_key 补成真正的自然排序键。
 
@@ -267,7 +297,8 @@ def backfill_sort_keys() -> int:
     """
     rows = db.query(
         "SELECT id, file_name, name_sort_key FROM assets "
-        "WHERE name_sort_key IS NULL OR name_sort_key = ''"
+        "WHERE (name_sort_key IS NULL OR name_sort_key = '') "
+        "AND COALESCE(sort_key_locked, 0) = 0"
     )
     fixed = 0
     for row in rows:
@@ -276,9 +307,12 @@ def backfill_sort_keys() -> int:
             (natural_sort_key(row["file_name"]), row["id"]),
         )
         fixed += 1
-    # 迁移时用 lower(file_name) 兜底过的行：含数字且键里还没补零，就重算
+    # 迁移时用 lower(file_name) 兜底过的行：含数字且键里还没补零，就重算。
+    # ★必须排除 sort_key_locked 的行★ —— 那些是用户上传时明确选择的「源文件夹顺序」，
+    # 一旦按文件名重算，用户选的顺序就没了。
     rows = db.query(
-        "SELECT id, file_name, name_sort_key FROM assets WHERE name_sort_key IS NOT NULL"
+        "SELECT id, file_name, name_sort_key FROM assets "
+        "WHERE name_sort_key IS NOT NULL AND COALESCE(sort_key_locked, 0) = 0"
     )
     for row in rows:
         name = row["file_name"] or ""
@@ -385,14 +419,25 @@ def purge_missing() -> int:
 
 def library_stats() -> dict:
     row = db.query_one(
-        "SELECT COUNT(*) AS total,"
-        " SUM(CASE WHEN media_type='image' THEN 1 ELSE 0 END) AS images,"
-        " SUM(CASE WHEN media_type='video' THEN 1 ELSE 0 END) AS videos,"
-        " SUM(CASE WHEN is_favorite=1 THEN 1 ELSE 0 END) AS favorites,"
+        # total 是「看得见的照片数」，必须和 /api/assets 列表口径一致（都不含回收站）。
+        # 之前用 COUNT(*) 会把回收站里的也算进去，于是首页显示 605 张、
+        # 列表里却只有 485 张，看起来像丢了 120 张照片。
+        # 库里真实存在的总行数单独用 total_all 给出。
+        "SELECT"
+        " SUM(CASE WHEN is_trashed=0 THEN 1 ELSE 0 END) AS total,"
+        " COUNT(*) AS total_all,"
+        " SUM(CASE WHEN media_type='image' AND is_trashed=0 THEN 1 ELSE 0 END) AS images,"
+        " SUM(CASE WHEN media_type='video' AND is_trashed=0 THEN 1 ELSE 0 END) AS videos,"
+        " SUM(CASE WHEN is_favorite=1 AND is_trashed=0 THEN 1 ELSE 0 END) AS favorites,"
         " SUM(CASE WHEN is_trashed=1 THEN 1 ELSE 0 END) AS trashed,"
+        # 占用空间按全部文件算：回收站里的照片同样占着磁盘
         " SUM(size_bytes) AS bytes FROM assets"
     )
     stats = dict(row) if row else {}
+    # SUM 在没有行时返回 NULL
+    for key in ("total", "total_all", "images", "videos", "favorites", "trashed"):
+        if stats.get(key) is None:
+            stats[key] = 0
     root = media_root()
     stats["media_root"] = str(root)
     stats["missing"] = db.count("SELECT COUNT(*) FROM assets WHERE is_missing=1")

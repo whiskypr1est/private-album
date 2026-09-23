@@ -64,6 +64,18 @@ public class MediaAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> 
     private final List<Object> rows = new ArrayList<>();
     private final Set<Long> selected = new HashSet<>();
     private boolean selectionMode = false;
+    /** 列表显示方式：每行一条，带文件名和信息（网格模式为 false）。 */
+    private boolean listMode = false;
+
+    public void setListMode(boolean list) {
+        if (this.listMode == list) return;
+        this.listMode = list;
+        notifyDataSetChanged();
+    }
+
+    public boolean isListMode() {
+        return listMode;
+    }
 
     /**
      * 回调重入锁。
@@ -211,7 +223,10 @@ public class MediaAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> 
             return new RecyclerView.ViewHolder(view) {
             };
         }
-        return new AssetHolder(inflater.inflate(R.layout.item_media, parent, false));
+        // 列表模式换成「一行一条」的布局；两个布局的 id 完全一致，
+        // 所以下面的 AssetHolder 不用改就能通用
+        return new AssetHolder(inflater.inflate(
+                listMode ? R.layout.item_media_list : R.layout.item_media, parent, false));
     }
 
     @Override
@@ -244,6 +259,14 @@ public class MediaAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> 
         holder.duration.setText(asset.durationText());
         holder.favBadge.setVisibility(asset.favorite ? View.VISIBLE : View.GONE);
 
+        // 列表模式才有文件名与信息行（网格布局里这两个控件是 null）
+        if (holder.name != null) {
+            holder.name.setText(asset.fileName == null ? "" : asset.fileName);
+        }
+        if (holder.info != null) {
+            holder.info.setText(listInfo(asset));
+        }
+
         boolean isSelected = selected.contains(asset.id);
         holder.overlay.setVisibility(isSelected ? View.VISIBLE : View.GONE);
         holder.check.setVisibility(selectionMode ? View.VISIBLE : View.GONE);
@@ -261,6 +284,27 @@ public class MediaAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> 
             listener.onAssetLongClick(asset, position);
             return true;
         });
+    }
+
+    /** 列表模式下第二行的小字：拍摄时间 · 分辨率 · 大小。 */
+    private String listInfo(Asset asset) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            String day = Ui.dayHeader(asset.takenAt);
+            if (day != null && !day.isEmpty()) sb.append(day);
+        } catch (Throwable ignored) {
+            // 时间解析失败就不显示时间，不影响其它信息
+        }
+        String res = asset.resolutionText();
+        if (res != null && !res.isEmpty()) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append(res);
+        }
+        if (asset.sizeText != null && !asset.sizeText.isEmpty()) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append(asset.sizeText);
+        }
+        return sb.toString();
     }
 
     private void toggle(Asset asset) {
@@ -311,6 +355,9 @@ public class MediaAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> 
         final ImageView favBadge;
         final View overlay;
         final ImageView check;
+        /** 只有列表布局才有，网格布局里是 null */
+        final TextView name;
+        final TextView info;
 
         AssetHolder(View itemView) {
             super(itemView);
@@ -320,6 +367,8 @@ public class MediaAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> 
             favBadge = itemView.findViewById(R.id.favBadge);
             overlay = itemView.findViewById(R.id.selectedOverlay);
             check = itemView.findViewById(R.id.check);
+            name = itemView.findViewById(R.id.name);
+            info = itemView.findViewById(R.id.info);
         }
     }
 

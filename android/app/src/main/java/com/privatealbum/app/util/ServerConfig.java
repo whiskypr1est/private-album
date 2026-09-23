@@ -27,6 +27,7 @@ public final class ServerConfig {
     private static final String KEY_TOKEN_EXPIRES = "token_expires";
     private static final String KEY_LAST_UPLOAD_DIR = "last_upload_dir";
     private static final String KEY_GRID_COLUMNS = "grid_columns";
+    private static final String KEY_VIEW_MODE = "view_mode";
     private static final String KEY_KEEP_ORIGINAL = "keep_original";
 
     /** 默认留空：由使用者首次打开 App 时自己填服务端地址，仓库里不预设任何人的机器。 */
@@ -137,6 +138,70 @@ public final class ServerConfig {
 
     public static void setGridColumns(Context context, int columns) {
         prefs(context).edit().putInt(KEY_GRID_COLUMNS, Math.max(2, Math.min(6, columns))).apply();
+    }
+
+    // ------------------------------------------------------------ 显示方式
+    /** 列表显示方式 */
+    public static final String MODE_LIST = "list";
+
+    /** 网格显示方式，编码成 "grid:3" / "grid:5"，列数不写死。 */
+    public static String gridMode(int columns) {
+        return "grid:" + Math.max(2, Math.min(6, columns));
+    }
+
+    /** 当前显示方式。从未设置过时，沿用旧的「每行张数」设置。 */
+    public static String viewMode(Context context) {
+        String mode = prefs(context).getString(KEY_VIEW_MODE, null);
+        if (mode == null || mode.isEmpty()) {
+            return gridMode(gridColumns(context));
+        }
+        return mode;
+    }
+
+    public static boolean isListMode(Context context) {
+        return MODE_LIST.equals(viewMode(context));
+    }
+
+    /** 当前显示方式对应的列数；列表模式返回 1（每行一条）。 */
+    public static int viewColumns(Context context) {
+        String mode = viewMode(context);
+        if (MODE_LIST.equals(mode)) return 1;
+        if (mode.startsWith("grid:")) {
+            try {
+                return Math.max(2, Math.min(6, Integer.parseInt(mode.substring(5))));
+            } catch (NumberFormatException ignored) {
+                // 落到下面的兜底
+            }
+        }
+        return gridColumns(context);
+    }
+
+    public static void setViewMode(Context context, String mode) {
+        prefs(context).edit().putString(KEY_VIEW_MODE, mode).apply();
+        // 网格模式同时同步「每行张数」，让「更多」页里的设置显示成一致的值
+        if (mode != null && mode.startsWith("grid:")) {
+            try {
+                setGridColumns(context, Integer.parseInt(mode.substring(5)));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+    }
+
+    /** 切换按钮用：3 列 -> 5 列 -> 列表 -> 3 列。 */
+    public static String nextViewMode(Context context) {
+        String mode = viewMode(context);
+        if (MODE_LIST.equals(mode)) return gridMode(3);
+        // 列数大于 3（比如「更多」里设过 4 列）时，下一步去列表
+        return viewColumns(context) <= 3 ? gridMode(5) : MODE_LIST;
+    }
+
+    /** 当前显示方式的中文描述，切换后给用户一个提示。 */
+    public static String viewModeLabel(Context context) {
+        if (isListMode(context)) {
+            return context.getString(com.privatealbum.app.R.string.view_mode_list);
+        }
+        return context.getString(com.privatealbum.app.R.string.view_mode_grid_n,
+                viewColumns(context));
     }
 
     public static boolean keepOriginal(Context context) {

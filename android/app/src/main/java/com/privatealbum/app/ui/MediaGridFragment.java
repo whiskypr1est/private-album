@@ -70,8 +70,9 @@ public class MediaGridFragment extends BaseFragment implements MediaAdapter.List
         com.privatealbum.app.util.Trace.log("MediaGridFragment.setupRecycler 开始 mode=" + mode
                 + " recycler=" + (recyclerView != null));
         adapter = new MediaAdapter(requireContext(), this);
+        adapter.setListMode(ServerConfig.isListMode(requireContext()));
         recyclerView.setLayoutManager(new GridLayoutManager(requireContext(),
-                ServerConfig.gridColumns(requireContext())));
+                ServerConfig.viewColumns(requireContext())));
         recyclerView.setAdapter(adapter);
         recyclerView.setItemAnimator(null);
         recyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
@@ -264,10 +265,19 @@ public class MediaGridFragment extends BaseFragment implements MediaAdapter.List
     }
 
     public void recreateGrid() {
-        if (recyclerView != null) {
-            recyclerView.setLayoutManager(new GridLayoutManager(requireContext(),
-                    ServerConfig.gridColumns(requireContext())));
+        if (recyclerView == null) return;
+        // 列表模式要换行的布局，所以先让适配器知道，再换列数（列表时列数为 1）
+        if (adapter != null) {
+            adapter.setListMode(ServerConfig.isListMode(requireContext()));
         }
+        recyclerView.setLayoutManager(new GridLayoutManager(requireContext(),
+                ServerConfig.viewColumns(requireContext())));
+    }
+
+    /** 切换显示方式：3 列 -> 5 列 -> 列表 -> 3 列。 */
+    public void cycleViewMode() {
+        ServerConfig.setViewMode(requireContext(), ServerConfig.nextViewMode(requireContext()));
+        recreateGrid();
     }
 
     @Override

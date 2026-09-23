@@ -429,6 +429,10 @@ class UploadCompleteBody(BaseModel):
     sha256: str | None = None
     taken_at: str | None = None
     file_name: str | None = None
+    # 本次上传选择的排序方式：
+    #   给出 order_index -> 保留源顺序（用序号当排序键，并加锁）
+    #   不给            -> 按文件名自然排序（默认）
+    order_index: int | None = None
 
 
 class MigrateBody(BaseModel):
@@ -1304,6 +1308,7 @@ def upload_complete(body: UploadCompleteBody, user: str = Depends(current_user))
             compute_sha=True,
             client_mtime=row["client_mtime"],
             upload_batch=str(batch_id),
+            sort_order=body.order_index,
         )
     except Exception as exc:
         log.exception("index failed after upload")

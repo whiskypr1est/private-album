@@ -237,11 +237,24 @@ public class AlbumApi {
 
     public Responses.AssetResult completeUpload(String uploadId, String fileName, String sha256,
                                                 String takenAt) throws ApiException {
+        return completeUpload(uploadId, fileName, sha256, takenAt, null);
+    }
+
+    /**
+     * 完成一次上传。
+     *
+     * @param orderIndex 非空表示「保留源文件夹顺序」：服务器把这个序号存成排序键并加锁，
+     *                   之后重扫媒体库也不会再按文件名重排。
+     *                   为空则表示按文件名自然排序（1.png &lt; 2.png &lt; 10.png）。
+     */
+    public Responses.AssetResult completeUpload(String uploadId, String fileName, String sha256,
+                                                String takenAt, Integer orderIndex) throws ApiException {
         Map<String, Object> body = new HashMap<>();
         body.put("upload_id", uploadId);
         if (fileName != null) body.put("file_name", fileName);
         if (sha256 != null) body.put("sha256", sha256);
         if (takenAt != null) body.put("taken_at", takenAt);
+        if (orderIndex != null) body.put("order_index", orderIndex);
         return http.post("/api/uploads/complete", body, Responses.AssetResult.class);
     }
 

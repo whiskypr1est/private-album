@@ -281,6 +281,32 @@ id ASC              ← 兜底，保证稳定
 
 ---
 
+### 上传时可以选排序方式（`order_index`）
+默认按文件名自然排序。如果上传时想让照片**保持源文件夹里的先后**（比如扫图、漫画面页，
+文件名顺序和实际顺序不一致），在 `POST /api/uploads/complete` 里带上 `order_index`：
+
+| 请求 | 排序键 | 效果 |
+|---|---|---|
+| 不带 `order_index` | `natural_sort_key(文件名)` | 按文件名：1、2、3、10、20、100 |
+| 带 `order_index: 0,1,2…` | `"~" + 序号补零12位` | 严格按给定序号，文件名不参与 |
+
+`order_index` 写入的同时会把 `assets.sort_key_locked` 置 1。**这个锁是必需的**：
+`upsert_asset()` 默认总是用文件名重算 `name_sort_key`，`backfill_sort_keys()` 也会对
+「含数字但没补零」的行重算 —— 没有锁的话，一次重扫或重启就会把用户选的顺序抹掉。
+两处都已按锁跳过。
+
+> 曾考虑靠「序号补零后恰好含 8 个连续 0」去躲过 `backfill_sort_keys` 的判断，
+> 但那是巧合而非设计：序号 123456789 补零后是 `000123456789`，不含 8 个连续零，就会被覆盖。
+> 所以用了显式列，不靠格式巧合。
+
+秒传（SHA-256 命中已有文件）的那一张**不会**被重新排序 —— 它属于原批次，保持原位。
+
+`~` 前缀让「人为指定的顺序」在库里一眼可辨。副作用：当两批的 `group_time`（秒级）
+恰好相同时，`~` 开头的键排在字母之后，也就是这两批的先后是不确定的。
+这是既有行为（两批按文件名排序时同样会遇到平局），不是这里引入的。
+
+---
+
 ## 七、子相册（相册里还能有相册）
 
 数据模型只加了一列：`albums.parent_id`，为空表示顶层相册。层级深度不限。
@@ -369,6 +395,11 @@ venv/bin/python server/scripts/group_under_patreon.py
 > `album_id` 不存在会返回 404，非数字返回 400；秒传（相同内容已存在）时
 > 也会把已有资源加入目标相册，不会因为去重而漏掉相册归属。
 | 维护 | `POST /api/library/scan`、`GET /api/library/stats`、`GET /api/library/verify`、`POST /api/library/rebuild-thumbs`、`GET /api/library/missing`、`POST /api/library/purge-missing`、`POST /api/library/cleanup-orphans` |
+
+> `GET /api/library/stats` 的 `total` 是**可见照片数（不含回收站）**，和 `/api/assets` 列表口径一致；
+> 库里真实总行数在 `total_all` 里，回收站数量在 `trashed` 里。
+> 早期版本 `total` 用的是 `COUNT(*)`（把回收站也算了），会出现「首页说 605 张、列表只有 485 张」
+> 这种看起来像丢照片的现象，已修。`bytes`（占用空间）仍按全部文件算 —— 回收站里的照片同样占磁盘。
 | 迁移 | `POST /api/library/migrate/plan`、`POST /api/library/migrate` |
 | 设置 | `GET /api/settings`、`PUT /api/settings` |
 | 在线接口文档 | `GET /docs`（FastAPI 自动生成，可直接在浏览器点击调试） |

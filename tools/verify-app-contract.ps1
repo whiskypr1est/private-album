@@ -267,6 +267,7 @@ if ($uploadId) {
 
   $doneBody = [System.Text.Encoding]::UTF8.GetBytes((@{
     upload_id = $uploadId; file_name = "安卓契约测试.jpg"; sha256 = $hash
+    order_index = 0     # App 选「保留源文件夹顺序」时会带这个字段
   } | ConvertTo-Json -Compress))
   $r = Invoke-Raw -Method POST -Url "$Base/api/uploads/complete" -Body $doneBody -Headers @{
     "Content-Type" = "application/json; charset=utf-8"; Authorization = "Bearer $token" }
@@ -274,6 +275,9 @@ if ($uploadId) {
   $done = Json-Of $r.Body
   Check "入库成功并返回 asset" ($done.asset -ne $null) (($r.Body).Substring(0, [Math]::Min(200, $r.Body.Length)))
   Check "中文文件名正确保存" ($done.asset.file_name -eq "安卓契约测试.jpg") ($done.asset.file_name)
+  # 「保留源顺序」的排序键是 ~ + 补零序号；App 的「源文件夹顺序」选项全靠它
+  Check "带 order_index 上传后排序键变成序号（保留源顺序生效）" `
+        ($done.asset.name_sort_key -eq "~000000000000") $done.asset.name_sort_key
 
   if ($done.asset) {
     $newId = $done.asset.id

@@ -80,6 +80,8 @@ public class AlbumDetailActivity extends AppCompatActivity {
     private final List<Object> rows = new ArrayList<>();
     private final List<Asset> items = new ArrayList<>();
     private final List<Album> subAlbums = new ArrayList<>();
+    /** 列表显示方式（每行一条，带文件名）。 */
+    private boolean listMode = false;
 
     public static Intent intent(Context context, Album album) {
         Intent intent = new Intent(context, AlbumDetailActivity.class);
@@ -123,6 +125,10 @@ public class AlbumDetailActivity extends AppCompatActivity {
                 renameThisAlbum();
                 return true;
             }
+            if (id == R.id.action_view_mode) {
+                cycleViewMode();
+                return true;
+            }
             return false;
         });
 
@@ -133,19 +139,7 @@ public class AlbumDetailActivity extends AppCompatActivity {
         uploadProgress = findViewById(R.id.uploadProgress);
 
         adapter = new Adapter();
-        final int span = Math.max(2, ServerConfig.gridColumns(this));
-        GridLayoutManager glm = new GridLayoutManager(this, span);
-        glm.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
-            @Override
-            public int getSpanSize(int position) {
-                // 分组标题占满整行，其余（子相册 / 照片）各占一格
-                return position >= 0 && position < rows.size()
-                        && rows.get(position) instanceof Section ? span : 1;
-            }
-        });
-        recycler.setLayoutManager(glm);
-        recycler.setAdapter(adapter);
-        recycler.setItemAnimator(null);
+        applyViewMode(true);
 
         findViewById(R.id.fabAdd).setOnClickListener(v -> showFabChooser());
 
@@ -179,6 +173,39 @@ public class AlbumDetailActivity extends AppCompatActivity {
         }
     }
 
+    /** 切换显示方式：3 列 -> 5 列 -> 列表 -> 3 列。 */
+    private void cycleViewMode() {
+        ServerConfig.setViewMode(this, ServerConfig.nextViewMode(this));
+        applyViewMode(false);
+        Ui.toast(this, ServerConfig.viewModeLabel(this));
+    }
+
+    /**
+     * 把当前的显示方式套到列表上。
+     *
+     * @param initial true 表示首次安装（此时才需要 setAdapter）
+     */
+    private void applyViewMode(boolean initial) {
+        listMode = ServerConfig.isListMode(this);
+        // 列表模式每行一条；分组标题永远占满整行
+        final int span = Math.max(1, ServerConfig.viewColumns(this));
+        GridLayoutManager glm = new GridLayoutManager(this, span);
+        glm.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
+            @Override
+            public int getSpanSize(int position) {
+                return position >= 0 && position < rows.size()
+                        && rows.get(position) instanceof Section ? span : 1;
+            }
+        });
+        recycler.setLayoutManager(glm);
+        if (initial) {
+            recycler.setAdapter(adapter);
+            recycler.setItemAnimator(null);
+        } else {
+            adapter.notifyDataSetChanged();
+        }
+    }
+
     /** 右下角「+」：上传文件 / 上传文件夹 / 新建子相册 —— 三个入口都放在这里。 */
     private void showFabChooser() {
         String[] options = {
@@ -201,9 +228,28 @@ public class AlbumDetailActivity extends AppCompatActivity {
     }
 
     private void startUpload(List<Uri> uris) {
+        if (uris == null || uris.isEmpty()) return;
+        // 只有一张时排序没有意义
+        if (uris.size() <= 1) {
+            enqueueUpload(uris, UploadManager.SortMode.BY_NAME);
+            return;
+        }
+        String[] labels = {
+                getString(R.string.upload_sort_by_name),
+                getString(R.string.upload_sort_by_source),
+        };
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.upload_sort_title))
+                .setItems(labels, (dlg, which) -> enqueueUpload(uris,
+                        which == 0 ? UploadManager.SortMode.BY_NAME
+                                   : UploadManager.SortMode.SOURCE_ORDER))
+                .show();
+    }
+
+    private void enqueueUpload(List<Uri> uris, UploadManager.SortMode mode) {
         Ui.toast(this, getString(R.string.upload_queued, uris.size()));
         // 关键：把 album.id 一起传下去，服务器入库时直接归入本相册
-        UploadManager.get().enqueue(this, uris, album.id);
+        UploadManager.get().enqueue(this, uris, album.id, mode);
         uploadBar.setVisibility(View.VISIBLE);
         uploadText.setText(getString(R.string.upload_running_to_album, uris.size()));
         uploadProgress.setProgress(0);
@@ -554,7 +600,9 @@ public class AlbumDetailActivity extends AppCompatActivity {
             if (viewType == TYPE_SUBALBUM) {
                 return new SubHolder(inflater.inflate(R.layout.item_subalbum, parent, false));
             }
-            return new PhotoHolder(inflater.inflate(R.layout.item_media, parent, false));
+            // 照片行：列表模式换成一行一条的布局（两个布局 id 一致，Holder 通用）
+            return new PhotoHolder(inflater.inflate(
+                    listMode ? R.layout.item_media_list : R.layout.item_media, parent, false));
         }
 
         @Override
@@ -625,6 +673,24 @@ public class AlbumDetailActivity extends AppCompatActivity {
         holder.favBadge.setVisibility(asset.favorite ? View.VISIBLE : View.GONE);
         holder.overlay.setVisibility(View.GONE);
         holder.check.setVisibility(View.GONE);
+        // 列表布局才有文件名与信息行（网格布局里这两个控件是 null）
+        if (holder.name != null) {
+            holder.name.setText(asset.fileName == null ? "" : asset.fileName);
+        }
+        if (holder.info != null) {
+            StringBuilder info = new StringBuilder();
+            if (asset.sizeText != null && !asset.sizeText.isEmpty()) info.append(asset.sizeText);
+            String res = asset.resolutionText();
+            if (res != null && !res.isEmpty()) {
+                if (info.length() > 0) info.append(" · ");
+                info.append(res);
+            }
+            if (asset.takenAt != null && !asset.takenAt.isEmpty()) {
+                if (info.length() > 0) info.append(" · ");
+                info.append(asset.takenAt.replace("T", " ").replace("Z", ""));
+            }
+            holder.info.setText(info.toString());
+        }
         holder.itemView.setOnClickListener(v -> {
             int idx = items.indexOf(asset);
             if (idx >= 0) openViewer(idx);
@@ -668,6 +734,9 @@ public class AlbumDetailActivity extends AppCompatActivity {
         final ImageView favBadge;
         final View overlay;
         final ImageView check;
+        /** 只有列表布局才有，网格布局里是 null */
+        final TextView name;
+        final TextView info;
 
         PhotoHolder(View itemView) {
             super(itemView);
@@ -677,6 +746,8 @@ public class AlbumDetailActivity extends AppCompatActivity {
             favBadge = itemView.findViewById(R.id.favBadge);
             overlay = itemView.findViewById(R.id.selectedOverlay);
             check = itemView.findViewById(R.id.check);
+            name = itemView.findViewById(R.id.name);
+            info = itemView.findViewById(R.id.info);
         }
     }
 }

@@ -43,6 +43,14 @@ public final class UploadManager {
         void onFinished(int uploaded, int duplicates, int failed, String lastError);
     }
 
+    /** 上传时的排序方式。 */
+    public enum SortMode {
+        /** 按文件名自然排序：1.png &lt; 2.png &lt; 10.png（默认，也是以前的行为） */
+        BY_NAME,
+        /** 保留源文件夹里的先后顺序，文件名不参与排序 */
+        SOURCE_ORDER
+    }
+
     private static final UploadManager INSTANCE = new UploadManager();
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -66,26 +74,33 @@ public final class UploadManager {
     }
 
     public void enqueue(Context context, List<Uri> uris) {
-        enqueue(context, uris, null);
+        enqueue(context, uris, null, SortMode.BY_NAME);
+    }
+
+    public void enqueue(Context context, List<Uri> uris, Long albumId) {
+        enqueue(context, uris, albumId, SortMode.BY_NAME);
     }
 
     /**
      * 上传一批文件。
      *
-     * @param albumId 非空时，上传完成的文件会自动进入这个相册
-     *                （相册页里的「上传到此相册」用它）
+     * @param albumId  非空时，上传完成的文件会自动进入这个相册
+     *                 （相册页里的「上传到此相册」用它）
+     * @param sortMode 这批文件的排序方式：按文件名，或保留源文件夹顺序
      */
-    public void enqueue(Context context, List<Uri> uris, Long albumId) {
+    public void enqueue(Context context, List<Uri> uris, Long albumId, SortMode sortMode) {
         if (uris == null || uris.isEmpty()) return;
         final Context appContext = context.getApplicationContext();
         final List<Uri> queue = new ArrayList<>(uris);
+        final SortMode mode = sortMode == null ? SortMode.BY_NAME : sortMode;
         // 这一批共用一个 batch_id：服务器按「批次」分组，
-        // 同一批内按文件名自然序排列（1.png < 2.png < 10.png）
+        // 同一批内按排序键排列（默认是文件名自然序 1 < 2 < 10）
         final String batchId = "b" + System.currentTimeMillis();
-        executor.execute(() -> runQueue(appContext, queue, albumId, batchId));
+        executor.execute(() -> runQueue(appContext, queue, albumId, batchId, mode));
     }
 
-    private void runQueue(Context context, List<Uri> queue, Long albumId, String batchId) {
+    private void runQueue(Context context, List<Uri> queue, Long albumId, String batchId,
+                          SortMode sortMode) {
         running = true;
         AlbumApi api = new AlbumApi(context);
         int uploaded = 0;
@@ -122,7 +137,12 @@ public final class UploadManager {
 
                 uploadChunks(api, init.uploadId, temp, meta.name, index, queue.size());
 
-                Responses.AssetResult result = api.completeUpload(init.uploadId, meta.name, sha, meta.takenAt);
+                // 「保留源文件夹顺序」时把这一批里的先后位置报给服务器，
+                // 服务器会拿它当排序键并加锁（重扫也不会被文件名重排）。
+                // 用 index-1 而不是跳过失败项后的计数：源顺序就是 queue 里的位置。
+                Integer orderIndex = sortMode == SortMode.SOURCE_ORDER ? (index - 1) : null;
+                Responses.AssetResult result = api.completeUpload(
+                        init.uploadId, meta.name, sha, meta.takenAt, orderIndex);
                 if (Boolean.TRUE.equals(result.duplicate)) {
                     duplicates++;
                 } else {

@@ -203,6 +203,9 @@ class Database:
             "name_sort_key": "TEXT",
             # 同一批上传的标识（同一次上传的图片归为一批）
             "upload_batch": "TEXT",
+            # 上传时若选了「保留源文件夹顺序」，排序键改成序号并打上这个锁，
+            # 之后重扫 / 回填都不许再按文件名改写它
+            "sort_key_locked": "INTEGER NOT NULL DEFAULT 0",
         }
         for column, definition in additions.items():
             if column not in existing:
@@ -232,7 +235,8 @@ class Database:
         # 先按文件名兜底，服务端启动时会把需要重算的补全）
         conn.execute(
             "UPDATE assets SET name_sort_key = lower(file_name) "
-            "WHERE name_sort_key IS NULL OR name_sort_key = ''"
+            "WHERE (name_sort_key IS NULL OR name_sort_key = '') "
+            "AND COALESCE(sort_key_locked, 0) = 0"
         )
 
     # -- settings ---------------------------------------------------------

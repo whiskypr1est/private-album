@@ -271,8 +271,28 @@ public class MainActivity extends AppCompatActivity {
      */
     void startUpload(List<Uri> uris, Long albumId) {
         if (uris == null || uris.isEmpty()) return;
+        // 只有一张时排序没有意义，不必打扰用户
+        if (uris.size() <= 1) {
+            enqueueUpload(uris, albumId, UploadManager.SortMode.BY_NAME);
+            return;
+        }
+        String[] labels = {
+                getString(R.string.upload_sort_by_name),
+                getString(R.string.upload_sort_by_source),
+        };
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.upload_sort_title))
+                .setItems(labels, (dlg, which) -> enqueueUpload(uris, albumId,
+                        which == 0 ? UploadManager.SortMode.BY_NAME
+                                   : UploadManager.SortMode.SOURCE_ORDER))
+                .show();
+    }
+
+    /** 真正入队。排序方式由用户在弹窗里选定。 */
+    void enqueueUpload(List<Uri> uris, Long albumId, UploadManager.SortMode mode) {
         Ui.toast(this, getString(R.string.upload_queued, uris.size()));
-        UploadManager.get().enqueue(this, uris, albumId);
+        UploadManager.get().enqueue(this, uris, albumId, mode);
+        if (uploadBar == null) return;
         uploadBar.setVisibility(View.VISIBLE);
         uploadBar.setTranslationY(0f);
         uploadText.setText(albumId == null
@@ -463,11 +483,15 @@ public class MainActivity extends AppCompatActivity {
         MenuItem save = menu.findItem(R.id.action_save_phone);
         MenuItem share = menu.findItem(R.id.action_share);
         MenuItem delete = menu.findItem(R.id.action_delete);
+        MenuItem viewMode = menu.findItem(R.id.action_view_mode);
 
         boolean gridMode = current instanceof MediaGridFragment
                 && ((MediaGridFragment) current).getMode() != MediaGridFragment.MODE_TRASH;
         // 「相册」页也允许搜索：照片页签去掉后，搜索是找照片的主要入口之一
         boolean searchable = gridMode || current instanceof AlbumsFragment;
+
+        // 显示方式切换只在有网格的页面出现（回收站页不显示），多选时藏起来
+        if (viewMode != null) viewMode.setVisible(gridMode && !selecting);
 
         if (search != null) search.setVisible(searchable && !selecting);
         if (selectAll != null) selectAll.setVisible(selecting);
@@ -505,6 +529,14 @@ public class MainActivity extends AppCompatActivity {
         if (id == R.id.action_refresh) {
             if (current instanceof MediaGridFragment) ((MediaGridFragment) current).refresh();
             if (current instanceof AlbumsFragment) ((AlbumsFragment) current).refresh();
+            return true;
+        }
+        if (id == R.id.action_view_mode) {
+            if (current instanceof MediaGridFragment) {
+                ((MediaGridFragment) current).cycleViewMode();
+                android.widget.Toast.makeText(this, ServerConfig.viewModeLabel(this),
+                        android.widget.Toast.LENGTH_SHORT).show();
+            }
             return true;
         }
         if (id == R.id.action_close_selection) {
