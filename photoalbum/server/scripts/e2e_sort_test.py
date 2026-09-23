@@ -178,24 +178,39 @@ def main() -> int:
 
     # ------------------------------------------------------------------
     section("5. 分页游标在自然序下不漏不重")
-    seen: list[str] = []
+    # 注意：不能写死翻页次数。这个库会随使用不断变大（现已 500+ 张），
+    # 翻页上限必须由权威总数推导，否则库一大就必然"翻不完"而误报失败；
+    # 也不能拿 limit=500 当"全量"——接口上限就是 500，那样比的两边都是截断的。
+    status, stats = call("GET", "/api/library/stats")
+    total = int(stats.get("total", 0)) if status == 200 else 0
+    check("能读到媒体库权威总数", total > 0, f"{total}")
+
+    PAGE = 7                      # 故意取一个不是总数因数的页大小
+    seen: list[int] = []
     cursor = None
-    for _ in range(10):
-        path = "/api/assets?limit=3" + (f"&cursor={cursor}" if cursor else "")
+    pages = 0
+    max_pages = (total // PAGE) + 10
+    while pages < max_pages:
+        path = f"/api/assets?limit={PAGE}" + (f"&cursor={cursor}" if cursor else "")
         status, chunk_page = call("GET", path)
         if status != 200:
             break
-        for item in chunk_page.get("items", []):
-            seen.append(item["file_name"] + "#" + str(item["id"]))
+        seen.extend(int(item["id"]) for item in chunk_page.get("items", []))
+        pages += 1
         cursor = chunk_page.get("next_cursor")
         if not cursor:
             break
-    ids = [int(x.split("#")[1]) for x in seen]
-    check("分页没有重复项", len(ids) == len(set(ids)), f"{len(ids)} 项 / {len(set(ids))} 唯一")
+
+    check("分页没有重复项", len(seen) == len(set(seen)),
+          f"{len(seen)} 项 / {len(set(seen))} 唯一")
+    check("分页能翻到库尾（游标最终耗尽）", not cursor, f"翻了 {pages} 页后仍有游标")
+    check(f"分页覆盖全部 {total} 张（每页 {PAGE} 条）", len(seen) == total,
+          f"分页取回 {len(seen)} / 权威总数 {total}")
+
     status, all_page = call("GET", "/api/assets?limit=500")
-    all_ids = [i["id"] for i in all_page.get("items", [])]
-    check("分页覆盖了全部数据（按 3 条一页翻完）", set(ids) == set(all_ids),
-          f"分页 {len(ids)} / 全量 {len(all_ids)}")
+    all_ids = [int(i["id"]) for i in all_page.get("items", [])]
+    check("翻页顺序与一次性读取逐条一致", all_ids == seen[:len(all_ids)],
+          f"大页 {len(all_ids)} 条与小页顺序不一致")
 
     # ------------------------------------------------------------------
     section("6. 秒传进来的文件也归入目标相册")

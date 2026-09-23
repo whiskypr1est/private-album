@@ -105,4 +105,18 @@
     <string name="crash_reopen">重新打开</string>
     <string name="logout_confirm">退出登录后将清空本地缓存，服务器上的照片不受影响。继续？</string>
     <string name="cache_cleared">本地缓存已清理</string>
+
+    <!-- 子相册（相册里还能有相册） -->
+    <string name="subalbum_section">子相册</string>
+    <string name="subalbum_new">新建子相册</string>
+    <string name="subalbum_none">还没有子相册</string>
+    <string name="subalbum_in_album">在「%1$s」里新建子相册</string>
+    <string name="action_move">移动到…</string>
+    <string name="move_title">把「%1$s」移动到</string>
+    <string name="move_to_top">顶层（移出当前相册）</string>
+    <string name="move_done">已移动</string>
+    <string name="album_delete_with_children">这个相册里有 %1$d 个子相册。删除后子相册会上移一层（不会被删掉），照片也都不受影响。继续？</string>
+    <string name="album_subtitle_children">%1$d 个子相册 · %2$d 张</string>
+    <string name="album_subtitle_photos">%1$d 张</string>
+    <string name="album_photos_section">照片</string>
 </resources>

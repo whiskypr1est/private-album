@@ -235,7 +235,7 @@ App 里「更多」页的媒体目录应该显示成 `/mnt/usb/photoalbum`，照
 
 ---
 
-## 五、排序规则（重要）
+## 六、排序规则（重要）
 
 照片列表的排序是：
 
@@ -281,7 +281,53 @@ id ASC              ← 兜底，保证稳定
 
 ---
 
-## 六、接口一览
+## 七、子相册（相册里还能有相册）
+
+数据模型只加了一列：`albums.parent_id`，为空表示顶层相册。层级深度不限。
+
+### 两条设计决定（重要，别改错了）
+
+**1. 父相册不「聚合」子相册的照片，只做容器。**
+
+打开 `Patreon` 看到的是它的 6 个子相册，而不是 536 张混在一起的照片。
+每个相册的 `count` 是**直接**包含的照片数，另有 `total_count` 表示含所有后代的合计。
+列表里显示成「6 个子相册 · 536 张」。
+
+这样做的理由：同一张照片不会在多处重复出现，翻页游标也只需处理一层。
+（如果你想要「父相册显示全部子孙照片」，改动点只在 `album_detail` 的 `items` 查询，
+把 `album_items.album_id = ?` 换成 `IN (自己 + 所有后代)` 即可。）
+
+**2. 删除相册时，子相册上移一层，而不是被一起删掉。**
+
+`DELETE /api/albums/{id}` 返回 `{"promoted_children": N}`，把子相册的 `parent_id`
+改成被删相册的 `parent_id`。照片在任何情况下都不受影响 —— 删相册永远只是「解散集合」。
+
+理由：一次误删不该连带毁掉整个树。这也和「删相册不删照片」的既有约定一致。
+
+### 防环
+
+移动相册时会拦住两类非法操作，都返回 **400**：
+
+- 把相册移进它自己；
+- 把相册移进它自己的某个后代（会让整棵树成环、谁都到不了顶层）。
+
+`_album_descendant_ids()` 用 visited 集合逐层展开，即使库里已经有脏环也不会死循环；
+`_album_breadcrumb()` 也有 64 层的防御上限。App 侧 `AlbumTree.moveTargets()` 会先把
+自己和后代从候选列表里剔掉，用户根本点不到必然失败的选项。
+
+### 手工归组脚本
+
+`server/scripts/group_under_patreon.py` 会把当时所有顶层相册归入一个叫 `Patreon`
+的顶层相册。走 HTTP 接口而不是直接写库，**可重复执行**（已存在的相册会跳过），
+并在迁移前后对账照片总数，数量不一致就报错退出。这次就是用它把 6 个相册归进去的：
+
+```bash
+venv/bin/python server/scripts/group_under_patreon.py
+```
+
+---
+
+## 八、接口一览
 
 所有接口除 `/api/health`、`/api/login`、`/api/setup`、`/share/*` 外都需要令牌：
 请求头 `Authorization: Bearer <token>`，或查询参数 `?token=<token>`
@@ -304,7 +350,7 @@ id ASC              ← 兜底，保证稳定
 | 收藏 / 归档 / 回收站 | `POST /api/assets/favorite`、`/archive`、`/trash`、`/restore` |
 | 彻底删除 | `DELETE /api/assets/{id}` |
 | 标签 | `GET /api/tags`、`POST /api/assets/tags` |
-| 相册 | `GET/POST /api/albums`、`GET/PATCH/DELETE /api/albums/{id}`、`POST /api/albums/{id}/items`、`/cover` |
+| 相册 | `GET/POST /api/albums`、`GET/PATCH/DELETE /api/albums/{id}`、`POST /api/albums/{id}/items`、`/cover`、**`POST /api/albums/{id}/move`（移动层级）** |
 | 分享链接 | `GET/POST /api/shares`、`DELETE /api/shares/{id}`、`GET /share/{token}` |
 | 分片上传 | `POST /api/uploads/init` → `PUT /api/uploads/{id}/chunk` → `POST /api/uploads/complete` |
 | 小文件直传 | `POST /api/uploads/simple`（multipart） |
@@ -345,7 +391,7 @@ id ASC              ← 兜底，保证稳定
 
 ---
 
-## 七、测试
+## 九、测试
 
 ### 接口端到端测试（71 项）
 
@@ -468,7 +514,7 @@ bash ~/photoalbum/deploy/reset-data.sh --yes
 
 ---
 
-## 八、故障排查
+## 十、故障排查
 
 | 现象 | 原因与处理 |
 |---|---|
@@ -485,7 +531,7 @@ bash ~/photoalbum/deploy/reset-data.sh --yes
 
 ---
 
-## 九、为什么这么设计（给未来的自己）
+## 十一、为什么这么设计（给未来的自己）
 
 - **为什么索引和文件分开**：照片本体是用户资产，索引是可重建的派生数据。
   分开之后，换硬盘、重建缩略图、重装服务都不会碰到照片。

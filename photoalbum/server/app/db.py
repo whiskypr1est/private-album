@@ -13,7 +13,7 @@ from typing import Any, Iterable, Iterator, Sequence
 
 import config
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -186,6 +186,11 @@ class Database:
                     "INSERT INTO meta(key, value) VALUES('schema_version', ?)",
                     (str(SCHEMA_VERSION),),
                 )
+            elif row["value"] != str(SCHEMA_VERSION):
+                conn.execute(
+                    "UPDATE meta SET value=? WHERE key='schema_version'",
+                    (str(SCHEMA_VERSION),),
+                )
 
     @staticmethod
     def _migrate(conn: sqlite3.Connection) -> None:
@@ -211,6 +216,12 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_assets_created_sort "
             "ON assets(created_at DESC, name_sort_key ASC)"
         )
+        # albums 表补列：支持子相册（parent_id 为空表示顶层相册）
+        album_cols = {row["name"] for row in conn.execute("PRAGMA table_info(albums)")}
+        if "parent_id" not in album_cols:
+            conn.execute("ALTER TABLE albums ADD COLUMN parent_id INTEGER")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_albums_parent ON albums(parent_id)")
+
         # uploads 表补列：上传时就指定归属相册
         upload_cols = {row["name"] for row in conn.execute("PRAGMA table_info(uploads)")}
         if "album_id" not in upload_cols:

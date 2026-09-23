@@ -167,6 +167,7 @@ $token = $login.token
 
 # 测试开始前先记下「当前最大的资源 id」，收尾时只删比它更新的东西
 $baselineId = Get-BaselineMaxId $token
+$subId = $null   # 子相册契约测试建的相册 id，收尾时单独删掉
 Write-Host ("    基线：当前库里最大资源 id = " + $baselineId + "（收尾只删比它新的产物）") -ForegroundColor DarkGray
 
 $badBody = [System.Text.Encoding]::UTF8.GetBytes('{"username":"cabbage","password":"wrong"}')
@@ -340,6 +341,66 @@ if ($uploadId) {
       Check "相册详情可用（App 用的 /api/albums/{id}?limit=200）" ($r.Status -eq 200 -and $alb.items.Count -eq 1) ($r.Status)
     }
 
+    # ---- 子相册：App 的 AlbumsFragment / AlbumDetailActivity / AlbumApi.moveAlbum 走这几条 ----
+    if ($album.id) {
+      $subBody = [System.Text.Encoding]::UTF8.GetBytes((@{
+        name = "契约子相册"; description = "嵌套测试"; parent_id = $album.id
+      } | ConvertTo-Json -Compress))
+      $r = Invoke-Raw -Method POST -Url "$Base/api/albums" -Body $subBody -Headers @{
+        "Content-Type" = "application/json; charset=utf-8"; Authorization = "Bearer $token" }
+      $sub = Json-Of $r.Body
+      if ($sub.id) { $subId = $sub.id }
+      Check "建子相册（带 parent_id）" ($r.Status -eq 200 -and $sub.id -ne $null) ($r.Body)
+
+      # 详情必须带这些字段：详情页的横向条、面包屑、小字全靠它们
+      $r = Invoke-Raw -Method GET -Url "$Base/api/albums/$($album.id)?limit=200" -Headers @{ Authorization = "Bearer $token" }
+      $d = Json-Of $r.Body
+      Check "相册详情含 parent_id" (Has-Prop $d.album "parent_id") ""
+      Check "相册详情含 child_count / total_count（App 的「N 个子相册 · M 张」靠它）" `
+            ((Has-Prop $d.album "child_count") -and (Has-Prop $d.album "total_count")) ""
+      Check "相册详情含 sub_albums 数组" (Is-ArrayProp $d "sub_albums") ""
+      Check "sub_albums 里能找到刚建的子相册" `
+            (@($d.sub_albums | Where-Object { $_.id -eq $sub.id }).Count -eq 1) ""
+      Check "相册详情含 breadcrumb 数组" (Is-ArrayProp $d "breadcrumb") ""
+
+      if ($sub.id) {
+        $r = Invoke-Raw -Method GET -Url "$Base/api/albums/$($sub.id)?limit=200" -Headers @{ Authorization = "Bearer $token" }
+        $sd = Json-Of $r.Body
+        Check "子相册的面包屑是两层（父 > 子）" (@($sd.breadcrumb).Count -eq 2) ("$(@($sd.breadcrumb).Count) 层")
+      }
+
+      # 列表必须带 parent_id，否则 App 组不出树、也就分不清顶层与子相册
+      $r = Invoke-Raw -Method GET -Url "$Base/api/albums" -Headers @{ Authorization = "Bearer $token" }
+      $allAlbums = Json-Of $r.Body
+      $mine = @($allAlbums.albums | Where-Object { $_.id -eq $sub.id })
+      # 注意：PowerShell 里 if 不能直接当命令参数，要包在 $(...) 里，否则这句根本不会执行
+      $mineParent = $(if ($mine.Count -eq 1) { "$($mine[0].parent_id)" } else { "没找到" })
+      Check "相册列表含子相册且带 parent_id" `
+            ($mine.Count -eq 1 -and $mine[0].parent_id -eq $album.id) $mineParent
+
+      # 成环必须被拒，否则 App 能把相册树弄坏。
+      # ★顺序很重要★：这一步必须在「把子相册移回顶层」之前做 ——
+      # 子相册一旦先被移走，它就不再是父相册的后代，此时父移进子是合法嵌套（会返回 200）。
+      $cycBody = [System.Text.Encoding]::UTF8.GetBytes((@{ parent_id = $($sub.id) } | ConvertTo-Json -Compress))
+      $r = Invoke-Raw -Method POST -Url "$Base/api/albums/$($album.id)/move" -Body $cycBody -Headers @{
+        "Content-Type" = "application/json"; Authorization = "Bearer $token" }
+      Check "把父相册移进自己的子相册 -> 400 拒绝" ($r.Status -eq 400) ($r.Status)
+
+      # 移动（App: AlbumApi.moveAlbum）
+      $mvBody = [System.Text.Encoding]::UTF8.GetBytes((@{ parent_id = $null } | ConvertTo-Json -Compress))
+      $r = Invoke-Raw -Method POST -Url "$Base/api/albums/$($sub.id)/move" -Body $mvBody -Headers @{
+        "Content-Type" = "application/json"; Authorization = "Bearer $token" }
+      Check "移回顶层可用（parent_id=null）" ($r.Status -eq 200) ($r.Status)
+
+      # 子相册移走之后再嵌套就合法了 —— 反过来证明上面那条 400 是真的在判环，不是无脑拒绝
+      $r = Invoke-Raw -Method POST -Url "$Base/api/albums/$($album.id)/move" -Body $cycBody -Headers @{
+        "Content-Type" = "application/json"; Authorization = "Bearer $token" }
+      Check "子相册移走后嵌套变成合法 -> 200（证明 400 不是误伤）" ($r.Status -eq 200) ($r.Status)
+      # 还原成「子在外层」，交给收尾清理按原顺序删除
+      $r = Invoke-Raw -Method POST -Url "$Base/api/albums/$($sub.id)/move" -Body $mvBody -Headers @{
+        "Content-Type" = "application/json"; Authorization = "Bearer $token" }
+    }
+
     # 分享
     $shareBody = [System.Text.Encoding]::UTF8.GetBytes((@{ kind = "asset"; target_id = $newId; expires_in_days = 30 } | ConvertTo-Json -Compress))
     $r = Invoke-Raw -Method POST -Url "$Base/api/shares" -Body $shareBody -Headers @{
@@ -364,6 +425,12 @@ if ($uploadId) {
     # 这三个名字是本脚本唯一会造出来的资源，其余一概不碰
     $removed = Remove-MyArtifacts $token $baselineId "安卓契约测试" @(
       "安卓契约测试.jpg", "安卓契约测试_原图.jpg", "安卓契约测试_副本.jpg")
+    # 注意顺序：必须先删子相册，再删父相册。
+    # 反过来的话父相册一删，子相册是被「上移一层」而不是消失，
+    # 会在用户的相册列表里留下一个叫「契约子相册」的垃圾。
+    if ($subId) {
+      Invoke-Raw -Method DELETE -Url "$Base/api/albums/$subId" -Headers @{ Authorization = "Bearer $token" } | Out-Null
+    }
     if ($album.id) { $r = Invoke-Raw -Method DELETE -Url "$Base/api/albums/$($album.id)" -Headers @{ Authorization = "Bearer $token" } }
     $leftover = @((Json-Of (Invoke-Raw -Method GET -Url "$Base/api/assets?limit=200" -Headers @{ Authorization = "Bearer $token" }).Body).items).Count
     Write-Host ("    （清理：删除本次测试产物 " + $removed + " 个；未动用全局清空回收站；库里剩余资源 " + $leftover + " 个）") -ForegroundColor DarkGray

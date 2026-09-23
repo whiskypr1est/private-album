@@ -147,10 +147,24 @@ public class AlbumApi {
     }
 
     public Responses.SimpleResult createAlbum(String name, String description) throws ApiException {
+        return createAlbum(name, description, null);
+    }
+
+    /** @param parentId 非空时，把这个相册建成它的子相册 */
+    public Responses.SimpleResult createAlbum(String name, String description, Long parentId)
+            throws ApiException {
         Map<String, Object> body = new HashMap<>();
         body.put("name", name);
         body.put("description", description);
+        if (parentId != null) body.put("parent_id", parentId);
         return http.post("/api/albums", body, Responses.SimpleResult.class);
+    }
+
+    /** 把相册移动到另一个相册下；parentId 为 null 表示移回顶层。 */
+    public Responses.SimpleResult moveAlbum(long id, Long parentId) throws ApiException {
+        Map<String, Object> body = new HashMap<>();
+        body.put("parent_id", parentId);
+        return http.post("/api/albums/" + id + "/move", body, Responses.SimpleResult.class);
     }
 
     public Responses.SimpleResult renameAlbum(long id, String name, String description) throws ApiException {

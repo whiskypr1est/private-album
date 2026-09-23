@@ -42,7 +42,11 @@ public class AlbumDetailActivity extends AppCompatActivity {
 
     private Album album;
     private AlbumApi api;
+    private com.google.android.material.appbar.MaterialToolbar toolbar;
     private RecyclerView recycler;
+    private RecyclerView subRecycler;
+    private View subSection;
+    private TextView breadcrumb;
     private View empty;
     private View uploadBar;
     private TextView uploadText;
@@ -50,7 +54,10 @@ public class AlbumDetailActivity extends AppCompatActivity {
     private ActivityResultLauncher<String> pickMedia;
     private ActivityResultLauncher<Uri> pickFolder;
     private Adapter adapter;
+    private SubAdapter subAdapter;
     private final List<Asset> items = new ArrayList<>();
+    /** 直接子相册（不含更深层） */
+    private final List<Album> subAlbums = new ArrayList<>();
 
     public static Intent intent(Context context, Album album) {
         Intent intent = new Intent(context, AlbumDetailActivity.class);
@@ -70,7 +77,7 @@ public class AlbumDetailActivity extends AppCompatActivity {
             return;
         }
 
-        com.google.android.material.appbar.MaterialToolbar toolbar = findViewById(R.id.toolbar);
+        toolbar = findViewById(R.id.toolbar);
         toolbar.setTitle(album.name);
         toolbar.setNavigationOnClickListener(v -> finish());
         com.privatealbum.app.util.SystemBars.padTop(toolbar);
@@ -82,8 +89,16 @@ public class AlbumDetailActivity extends AppCompatActivity {
                 shareAlbum();
                 return true;
             }
+            if (id == R.id.action_new_subalbum) {
+                newSubAlbum();
+                return true;
+            }
+            if (id == R.id.action_move_album) {
+                moveThisAlbum();
+                return true;
+            }
             if (id == R.id.action_rename_album) {
-                Ui.toast(this, "请在「相册」页长按相册重命名");
+                renameThisAlbum();
                 return true;
             }
             return false;
@@ -98,6 +113,16 @@ public class AlbumDetailActivity extends AppCompatActivity {
         recycler.setLayoutManager(new GridLayoutManager(this, ServerConfig.gridColumns(this)));
         recycler.setAdapter(adapter);
         recycler.setItemAnimator(null);
+
+        // 子相册横向条：没子相册时整块隐藏
+        breadcrumb = findViewById(R.id.breadcrumb);
+        subSection = findViewById(R.id.subAlbumsSection);
+        subRecycler = findViewById(R.id.subAlbumsRecycler);
+        subAdapter = new SubAdapter();
+        subRecycler.setLayoutManager(new androidx.recyclerview.widget.LinearLayoutManager(
+                this, androidx.recyclerview.widget.LinearLayoutManager.HORIZONTAL, false));
+        subRecycler.setAdapter(subAdapter);
+        subRecycler.setItemAnimator(null);
 
         findViewById(R.id.fabAdd).setOnClickListener(v -> showUploadChooser());
 
@@ -219,8 +244,33 @@ public class AlbumDetailActivity extends AppCompatActivity {
                     items.clear();
                     if (detail.items != null) items.addAll(detail.items);
                     if (detail.album != null) album = detail.album;
+
+                    subAlbums.clear();
+                    if (detail.subAlbums != null) subAlbums.addAll(detail.subAlbums);
+
                     adapter.notifyDataSetChanged();
-                    empty.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
+                    subAdapter.notifyDataSetChanged();
+
+                    toolbar.setTitle(album.name);
+
+                    // 面包屑：只有进到子相册里（层级 > 1）才显示，顶层相册显示它没意义
+                    if (detail.breadcrumb != null && detail.breadcrumb.size() > 1) {
+                        StringBuilder crumb = new StringBuilder();
+                        for (Responses.Breadcrumb b : detail.breadcrumb) {
+                            if (crumb.length() > 0) crumb.append(" / ");
+                            crumb.append(b.name);
+                        }
+                        breadcrumb.setText(crumb.toString());
+                        breadcrumb.setVisibility(View.VISIBLE);
+                    } else {
+                        breadcrumb.setVisibility(View.GONE);
+                    }
+
+                    subSection.setVisibility(subAlbums.isEmpty() ? View.GONE : View.VISIBLE);
+                    // 既没有照片、也没有子相册，才算「空相册」
+                    empty.setVisibility(items.isEmpty() && subAlbums.isEmpty()
+                            ? View.VISIBLE : View.GONE);
+
                     androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe = findViewById(R.id.swipe);
                     swipe.setRefreshing(false);
                 });
@@ -232,6 +282,251 @@ public class AlbumDetailActivity extends AppCompatActivity {
                 });
             }
         }).start();
+    }
+
+    // -------------------------------------------------------- 子相册
+    /** 进入子相册：直接再开一个详情页，系统返回键天然就是「上一层」。 */
+    private void openSubAlbum(Album sub) {
+        startActivity(AlbumDetailActivity.intent(this, sub));
+    }
+
+    private void newSubAlbum() {
+        View view = LayoutInflater.from(this).inflate(R.layout.dialog_album_name, null);
+        com.google.android.material.textfield.TextInputEditText name = view.findViewById(R.id.name);
+        com.google.android.material.textfield.TextInputEditText desc = view.findViewById(R.id.description);
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.subalbum_in_album, album.name))
+                .setView(view)
+                .setNegativeButton(getText(R.string.action_cancel), null)
+                .setPositiveButton(getText(R.string.action_save), (dlg, idx) -> {
+                    String subName = name.getText() == null ? "" : name.getText().toString().trim();
+                    String subDesc = desc.getText() == null ? "" : desc.getText().toString().trim();
+                    if (subName.isEmpty()) {
+                        Ui.toast(this, getString(R.string.enter_album_name));
+                        return;
+                    }
+                    createSubAlbumOnServer(subName, subDesc);
+                })
+                .show();
+    }
+
+    private void createSubAlbumOnServer(String subName, String subDesc) {
+        new Thread(() -> {
+            try {
+                api.createAlbum(subName, subDesc, album.id);
+                runOnUiThread(this::load);
+            } catch (ApiException e) {
+                runOnUiThread(() -> Ui.toastLong(this, e.getMessage()));
+            }
+        }).start();
+    }
+
+    private void renameThisAlbum() {
+        View view = LayoutInflater.from(this).inflate(R.layout.dialog_album_name, null);
+        com.google.android.material.textfield.TextInputEditText name = view.findViewById(R.id.name);
+        com.google.android.material.textfield.TextInputEditText desc = view.findViewById(R.id.description);
+        name.setText(album.name);
+        desc.setText(album.description);
+        new AlertDialog.Builder(this)
+                .setTitle(getText(R.string.album_rename))
+                .setView(view)
+                .setNegativeButton(getText(R.string.action_cancel), null)
+                .setPositiveButton(getText(R.string.action_save), (dlg, idx) -> {
+                    String newName = name.getText() == null ? "" : name.getText().toString().trim();
+                    String newDesc = desc.getText() == null ? "" : desc.getText().toString().trim();
+                    if (newName.isEmpty()) return;
+                    new Thread(() -> {
+                        try {
+                            api.renameAlbum(album.id, newName, newDesc);
+                            runOnUiThread(this::load);
+                        } catch (ApiException e) {
+                            runOnUiThread(() -> Ui.toastLong(this, e.getMessage()));
+                        }
+                    }).start();
+                })
+                .show();
+    }
+
+    /** 把「当前相册」移动到别处（含移回顶层）。 */
+    private void moveThisAlbum() {
+        new Thread(() -> {
+            try {
+                Responses.AlbumList result = api.albums();
+                List<Album> all = result.albums == null ? new ArrayList<>() : result.albums;
+                // 排除自己与自己的所有后代，避免让用户白点一个必然失败的选项
+                final List<Album> targets = com.privatealbum.app.util.AlbumTree
+                        .moveTargets(all, album.id);
+                runOnUiThread(() -> showMovePicker(all, targets, album));
+            } catch (ApiException e) {
+                runOnUiThread(() -> Ui.toastLong(this, e.getMessage()));
+            }
+        }).start();
+    }
+
+    private void showMovePicker(List<Album> all, List<Album> targets, Album target) {
+        final String[] labels = new String[targets.size() + 1];
+        labels[0] = getString(R.string.move_to_top);
+        for (int i = 0; i < targets.size(); i++) {
+            labels[i + 1] = com.privatealbum.app.util.AlbumTree.indentedName(all, targets.get(i));
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.move_title, target.name))
+                .setItems(labels, (dlg, which) -> {
+                    Long parentId = which == 0 ? null : targets.get(which - 1).id;
+                    moveAlbumOnServer(target, parentId);
+                })
+                .show();
+    }
+
+    private void moveAlbumOnServer(Album target, Long parentId) {
+        new Thread(() -> {
+            try {
+                api.moveAlbum(target.id, parentId);
+                runOnUiThread(() -> {
+                    Ui.toast(this, getString(R.string.move_done));
+                    if (target.id == album.id) {
+                        load();          // 自己被动过，刷新面包屑
+                    } else {
+                        load();          // 子相册动过，刷新这一层
+                    }
+                });
+            } catch (ApiException e) {
+                runOnUiThread(() -> Ui.toastLong(this, e.getMessage()));
+            }
+        }).start();
+    }
+
+    private void showSubAlbumMenu(Album sub) {
+        String[] actions = {
+                getString(R.string.action_rename),
+                getString(R.string.action_move),
+                getString(R.string.action_delete),
+        };
+        new AlertDialog.Builder(this)
+                .setTitle(sub.name)
+                .setItems(actions, (dlg, which) -> {
+                    if (which == 0) {
+                        renameSubAlbum(sub);
+                    } else if (which == 1) {
+                        new Thread(() -> {
+                            try {
+                                Responses.AlbumList result = api.albums();
+                                List<Album> all = result.albums == null ? new ArrayList<>() : result.albums;
+                                final List<Album> targets = com.privatealbum.app.util.AlbumTree
+                                        .moveTargets(all, sub.id);
+                                runOnUiThread(() -> showMovePicker(all, targets, sub));
+                            } catch (ApiException e) {
+                                runOnUiThread(() -> Ui.toastLong(this, e.getMessage()));
+                            }
+                        }).start();
+                    } else {
+                        confirmDeleteSubAlbum(sub);
+                    }
+                })
+                .show();
+    }
+
+    private void renameSubAlbum(Album sub) {
+        renameAlbumDialog(sub, this::load);
+    }
+
+    private void confirmDeleteSubAlbum(Album sub) {
+        String msg = sub.hasChildren()
+                ? getString(R.string.album_delete_with_children, sub.childCount)
+                : getString(R.string.album_delete_confirm);
+        new AlertDialog.Builder(this)
+                .setMessage(msg)
+                .setNegativeButton(getText(R.string.action_cancel), null)
+                .setPositiveButton(getText(R.string.action_delete), (dlg, idx) -> new Thread(() -> {
+                    try {
+                        api.deleteAlbum(sub.id);
+                        runOnUiThread(this::load);
+                    } catch (ApiException e) {
+                        runOnUiThread(() -> Ui.toastLong(this, e.getMessage()));
+                    }
+                }).start())
+                .show();
+    }
+
+    /** 重命名任意相册（供子相册菜单复用）。 */
+    private void renameAlbumDialog(Album target, Runnable after) {
+        View view = LayoutInflater.from(this).inflate(R.layout.dialog_album_name, null);
+        com.google.android.material.textfield.TextInputEditText name = view.findViewById(R.id.name);
+        com.google.android.material.textfield.TextInputEditText desc = view.findViewById(R.id.description);
+        name.setText(target.name);
+        desc.setText(target.description);
+        new AlertDialog.Builder(this)
+                .setTitle(getText(R.string.album_rename))
+                .setView(view)
+                .setNegativeButton(getText(R.string.action_cancel), null)
+                .setPositiveButton(getText(R.string.action_save), (dlg, idx) -> {
+                    String newName = name.getText() == null ? "" : name.getText().toString().trim();
+                    String newDesc = desc.getText() == null ? "" : desc.getText().toString().trim();
+                    if (newName.isEmpty()) return;
+                    new Thread(() -> {
+                        try {
+                            api.renameAlbum(target.id, newName, newDesc);
+                            runOnUiThread(after);
+                        } catch (ApiException e) {
+                            runOnUiThread(() -> Ui.toastLong(this, e.getMessage()));
+                        }
+                    }).start();
+                })
+                .show();
+    }
+
+    /** 子相册横向条的适配器。 */
+    private class SubAdapter extends RecyclerView.Adapter<SubHolder> {
+
+        @NonNull
+        @Override
+        public SubHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            return new SubHolder(LayoutInflater.from(parent.getContext())
+                    .inflate(R.layout.item_subalbum, parent, false));
+        }
+
+        @Override
+        public void onBindViewHolder(@NonNull SubHolder holder, int position) {
+            Album sub = subAlbums.get(position);
+            holder.name.setText(sub.name);
+            holder.subtitle.setText(sub.subtitle());
+
+            String cover = api.albumCoverUrl(sub);
+            if (cover == null) {
+                holder.cover.setPadding(40, 40, 40, 40);
+                holder.cover.setImageResource(R.drawable.ic_folder);
+            } else {
+                holder.cover.setPadding(0, 0, 0, 0);
+                Glide.with(holder.cover.getContext())
+                        .load(cover)
+                        .apply(AlbumApp.thumbOptions())
+                        .into(holder.cover);
+            }
+
+            holder.itemView.setOnClickListener(v -> openSubAlbum(sub));
+            holder.itemView.setOnLongClickListener(v -> {
+                showSubAlbumMenu(sub);
+                return true;
+            });
+        }
+
+        @Override
+        public int getItemCount() {
+            return subAlbums.size();
+        }
+    }
+
+    static class SubHolder extends RecyclerView.ViewHolder {
+        final ImageView cover;
+        final TextView name;
+        final TextView subtitle;
+
+        SubHolder(View itemView) {
+            super(itemView);
+            cover = itemView.findViewById(R.id.cover);
+            name = itemView.findViewById(R.id.name);
+            subtitle = itemView.findViewById(R.id.subtitle);
+        }
     }
 
     private void shareAlbum() {

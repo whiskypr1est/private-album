@@ -9,6 +9,16 @@
         app:showAsAction="ifRoom" />
 
     <item
+        android:id="@+id/action_new_subalbum"
+        android:title="@string/subalbum_new"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_move_album"
+        android:title="@string/action_move"
+        app:showAsAction="never" />
+
+    <item
         android:id="@+id/action_rename_album"
         android:title="@string/action_rename"
         app:showAsAction="never" />

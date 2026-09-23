@@ -13,9 +13,55 @@
         app:navigationIcon="@drawable/ic_back"
         app:titleTextColor="@color/text_primary" />
 
+    <!-- 在子相册里时显示「Patreon / 小红（jw）」，顶层相册时隐藏 -->
+    <TextView
+        android:id="@+id/breadcrumb"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="4dp"
+        android:ellipsize="middle"
+        android:maxLines="1"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
+    <!-- 子相册区：没有子相册时整块隐藏 -->
+    <LinearLayout
+        android:id="@+id/subAlbumsSection"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/subAlbumsTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="16dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="16dp"
+            android:text="@string/subalbum_section"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/subAlbumsRecycler"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clipToPadding="false"
+            android:orientation="horizontal"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp" />
+    </LinearLayout>
+
+    <!-- weight=1：上面的面包屑/子相册区出现时，照片网格自动让出高度 -->
     <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="0dp"
+        android:layout_weight="1">
 
         <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
             android:id="@+id/swipe"
@@ -36,7 +82,7 @@
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:gravity="center"
-            android:text="相册还是空的\n在「照片」里长按选择后加入相册"
+            android:text="@string/album_blank_hint"
             android:textColor="@color/text_secondary"
             android:visibility="gone" />
 

@@ -53,7 +53,10 @@ public class AlbumsFragment extends BaseFragment {
     protected List<Object> fetch(String cursor) throws ApiException {
         com.privatealbum.app.util.Trace.log("AlbumsFragment.fetch 请求相册列表");
         Responses.AlbumList result = api.albums();
-        List<Album> albums = result.albums == null ? new ArrayList<>() : result.albums;
+        List<Album> fetched = result.albums == null ? new ArrayList<>() : result.albums;
+        // 只显示顶层相册：子相册在父相册详情页里进入，
+        // 否则它们在列表里会以「平铺」的形式重复出现，层级就白做了。
+        List<Album> albums = com.privatealbum.app.util.AlbumTree.topLevel(fetched);
         // 第一行放一个「全部照片」入口：这样没加入任何相册的照片也能看到，
         // 又不用把「照片」页签加回来。
         long total = 0;
@@ -169,7 +172,12 @@ public class AlbumsFragment extends BaseFragment {
             Album album = (Album) rows.get(position);
             holder.name.setText(album.name);
             StringBuilder subtitle = new StringBuilder();
-            subtitle.append(album.count).append(" 项");
+            if (album.id == ALL_PHOTOS_ID) {
+                subtitle.append(album.count).append(" 项");
+            } else {
+                // 有子相册时会显示「3 个子相册 · 209 张」，否则只显示张数
+                subtitle.append(album.subtitle());
+            }
             if (album.description != null && !album.description.isEmpty()) {
                 subtitle.append(" · ").append(album.description);
             }
@@ -223,13 +231,20 @@ public class AlbumsFragment extends BaseFragment {
     }
 
     private void showAlbumMenu(Album album) {
-        String[] items = {"重命名", "设为封面（用第一张）", "删除相册"};
+        String[] items = {
+                getString(R.string.action_rename),
+                getString(R.string.action_move),
+                "设为封面（用第一张）",
+                getString(R.string.action_delete),
+        };
         new AlertDialog.Builder(requireContext())
                 .setTitle(album.name)
                 .setItems(items, (dlg, idx) -> {
                     if (idx == 0) {
                         renameAlbum(album);
                     } else if (idx == 1) {
+                        moveAlbum(album);
+                    } else if (idx == 2) {
                         setFirstAsCover(album);
                     } else {
                         confirmDeleteAlbum(album);
@@ -238,9 +253,89 @@ public class AlbumsFragment extends BaseFragment {
                 .show();
     }
 
-    private void confirmDeleteAlbum(Album album) {
+    /** 把相册移动到其它相册下，或移回顶层。 */
+    private void moveAlbum(Album album) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Responses.AlbumList result = api.albums();
+                    final List<Album> all = result.albums == null ? new ArrayList<>() : result.albums;
+                    // 排除自己与自己的所有后代，避免给出必然失败的选项
+                    final List<Album> targets = com.privatealbum.app.util.AlbumTree
+                            .moveTargets(all, album.id);
+                    if (!isAdded()) return;
+                    requireActivity().runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            showMovePicker(all, targets, album);
+                        }
+                    });
+                } catch (ApiException e) {
+                    if (!isAdded()) return;
+                    requireActivity().runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            android.widget.Toast.makeText(requireContext(), e.getMessage(),
+                                    android.widget.Toast.LENGTH_LONG).show();
+                        }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private void showMovePicker(List<Album> all, List<Album> targets, Album target) {
+        final String[] labels = new String[targets.size() + 1];
+        labels[0] = getString(R.string.move_to_top);
+        for (int i = 0; i < targets.size(); i++) {
+            labels[i + 1] = com.privatealbum.app.util.AlbumTree.indentedName(all, targets.get(i));
+        }
         new AlertDialog.Builder(requireContext())
-                .setMessage(getText(R.string.album_delete_confirm))
+                .setTitle(getString(R.string.move_title, target.name))
+                .setItems(labels, (dlg, which) -> {
+                    Long parentId = which == 0 ? null : targets.get(which - 1).id;
+                    moveAlbumOnServer(target, parentId);
+                })
+                .show();
+    }
+
+    private void moveAlbumOnServer(Album target, Long parentId) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    api.moveAlbum(target.id, parentId);
+                    if (!isAdded()) return;
+                    requireActivity().runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            android.widget.Toast.makeText(requireContext(), R.string.move_done,
+                                    android.widget.Toast.LENGTH_SHORT).show();
+                            refresh();
+                        }
+                    });
+                } catch (ApiException e) {
+                    if (!isAdded()) return;
+                    requireActivity().runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            android.widget.Toast.makeText(requireContext(), e.getMessage(),
+                                    android.widget.Toast.LENGTH_LONG).show();
+                        }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private void confirmDeleteAlbum(Album album) {
+        // 有子相册时要讲清楚：子相册会上移，不会被一起删掉
+        String msg = album.hasChildren()
+                ? getString(R.string.album_delete_with_children, album.childCount)
+                : getString(R.string.album_delete_confirm);
+        new AlertDialog.Builder(requireContext())
+                .setMessage(msg)
                 .setNegativeButton(getText(R.string.action_cancel), null)
                 .setPositiveButton(getText(R.string.action_delete), (dlgBtn, idxBtn) -> deleteAlbumOnServer(album))
                 .show();

@@ -389,6 +389,18 @@ class AlbumBody(BaseModel):
     description: str | None = None
 
 
+class AlbumCreateBody(BaseModel):
+    """新建相册。parent_id 为空表示建在顶层，否则建为该相册的子相册。"""
+    name: str = Field(min_length=1, max_length=120)
+    description: str | None = None
+    parent_id: int | None = None
+
+
+class AlbumMoveBody(BaseModel):
+    """把相册移动到另一个相册下；parent_id 为空表示移回顶层。"""
+    parent_id: int | None = None
+
+
 class AlbumCoverBody(BaseModel):
     asset_id: int | None = None
 
@@ -927,38 +939,134 @@ def list_tags(user: str = Depends(current_user)) -> dict:
 
 
 # ==========================================================================
-# albums
+# albums（支持子相册：albums.parent_id 为空表示顶层）
 # ==========================================================================
+def _get_album_row(album_id: int):
+    row = db.query_one("SELECT * FROM albums WHERE id=?", (album_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail="相册不存在")
+    return row
+
+
+def _album_child_ids(album_id: int) -> list[int]:
+    return [
+        int(r["id"])
+        for r in db.query("SELECT id FROM albums WHERE parent_id=? ORDER BY name", (album_id,))
+    ]
+
+
+def _album_descendant_ids(album_id: int) -> set[int]:
+    """所有后代相册 id（不含自己）。带 visited 集合，即使库里已有环也不会死循环。"""
+    seen: set[int] = set()
+    frontier = [album_id]
+    while frontier:
+        rows = db.query(
+            "SELECT id FROM albums WHERE parent_id IN (%s)" % ",".join("?" * len(frontier)),
+            tuple(frontier),
+        )
+        nxt: list[int] = []
+        for r in rows:
+            cid = int(r["id"])
+            if cid in seen or cid == album_id:
+                continue
+            seen.add(cid)
+            nxt.append(cid)
+        frontier = nxt
+    return seen
+
+
+def _album_breadcrumb(album_id: int) -> list[dict]:
+    """从根到当前相册的路径，供 App 显示「Patreon / 小红（jw）」。"""
+    chain: list[dict] = []
+    cur: int | None = album_id
+    for _ in range(64):                      # 防御性上限，避免脏数据成环时死循环
+        if cur is None:
+            break
+        row = db.query_one("SELECT id, name, parent_id FROM albums WHERE id=?", (cur,))
+        if not row:
+            break
+        chain.append({"id": row["id"], "name": row["name"]})
+        cur = row["parent_id"]
+    chain.reverse()
+    return chain
+
+
+def _album_cover(album_id: int, _seen: set[int] | None = None) -> int | None:
+    """封面：优先手选的，其次自己的第一张，再次第一个子相册的（递归向上取）。"""
+    if _seen is None:
+        _seen = set()
+    if album_id in _seen:
+        return None
+    _seen.add(album_id)
+    row = db.query_one("SELECT cover_asset FROM albums WHERE id=?", (album_id,))
+    if row and row["cover_asset"] is not None:
+        return int(row["cover_asset"])
+    first = db.query_one(
+        "SELECT asset_id FROM album_items WHERE album_id=? ORDER BY sort_key, added_at LIMIT 1",
+        (album_id,),
+    )
+    if first:
+        return int(first["asset_id"])
+    for cid in _album_child_ids(album_id):
+        got = _album_cover(cid, _seen)
+        if got is not None:
+            return got
+    return None
+
+
+def _album_payload(row) -> dict:
+    """相册的对外结构。count 是直接包含的照片数，total_count 含所有后代。"""
+    aid = int(row["id"])
+    album = dict(row)
+    album["parent_id"] = row["parent_id"]
+    direct = db.count("SELECT COUNT(*) FROM album_items WHERE album_id=?", (aid,))
+    album["count"] = direct
+    album["child_count"] = db.count("SELECT COUNT(*) FROM albums WHERE parent_id=?", (aid,))
+    total = direct
+    for cid in _album_descendant_ids(aid):
+        total += db.count("SELECT COUNT(*) FROM album_items WHERE album_id=?", (cid,))
+    album["total_count"] = total
+    cover = _album_cover(aid)
+    album["cover_asset"] = cover
+    album["cover_url"] = f"/api/assets/{cover}/thumb?size=256" if cover else None
+    return album
+
+
 @app.get("/api/albums")
 def list_albums(user: str = Depends(current_user)) -> dict:
-    rows = db.query(
-        "SELECT al.*, (SELECT COUNT(*) FROM album_items ai WHERE ai.album_id=al.id) AS count "
-        "FROM albums al ORDER BY al.updated_at DESC"
-    )
-    albums = []
-    for row in rows:
-        album = dict(row)
-        cover = row["cover_asset"]
-        if cover is None:
-            first = db.query_one(
-                "SELECT asset_id FROM album_items WHERE album_id=? ORDER BY sort_key, added_at LIMIT 1",
-                (row["id"],),
-            )
-            cover = first["asset_id"] if first else None
-        album["cover_asset"] = cover
-        album["cover_url"] = f"/api/assets/{cover}/thumb?size=256" if cover else None
-        albums.append(album)
-    return {"albums": albums}
+    """返回全部层级的相册（扁平表），App 依据 parent_id 自行组树。"""
+    rows = db.query("SELECT * FROM albums ORDER BY updated_at DESC")
+    return {"albums": [_album_payload(r) for r in rows]}
 
 
 @app.post("/api/albums")
-def create_album(body: AlbumBody, user: str = Depends(current_user)) -> dict:
+def create_album(body: AlbumCreateBody, user: str = Depends(current_user)) -> dict:
+    if body.parent_id is not None:
+        if not db.query_one("SELECT id FROM albums WHERE id=?", (body.parent_id,)):
+            raise HTTPException(status_code=404, detail="父相册不存在")
     stamp = now_iso()
     album_id = db.execute(
-        "INSERT INTO albums(name, description, created_at, updated_at) VALUES(?,?,?,?)",
-        (body.name.strip(), body.description, stamp, stamp),
+        "INSERT INTO albums(name, description, parent_id, created_at, updated_at) VALUES(?,?,?,?,?)",
+        (body.name.strip(), body.description, body.parent_id, stamp, stamp),
     )
     return {"ok": True, "id": album_id}
+
+
+@app.post("/api/albums/{album_id}/move")
+def move_album(album_id: int, body: AlbumMoveBody, user: str = Depends(current_user)) -> dict:
+    """把相册挂到另一个相册下（parent_id 为空则移回顶层）。会阻止成环。"""
+    _get_album_row(album_id)
+    target = body.parent_id
+    if target is not None:
+        if target == album_id:
+            raise HTTPException(status_code=400, detail="不能把相册移动到它自己里面")
+        if not db.query_one("SELECT id FROM albums WHERE id=?", (target,)):
+            raise HTTPException(status_code=404, detail="目标相册不存在")
+        if target in _album_descendant_ids(album_id):
+            raise HTTPException(status_code=400, detail="不能把相册移动到它自己的子相册里")
+    db.execute("UPDATE albums SET parent_id=?, updated_at=? WHERE id=?",
+               (target, now_iso(), album_id))
+    return {"ok": True}
 
 
 @app.patch("/api/albums/{album_id}")
@@ -972,8 +1080,14 @@ def update_album(album_id: int, body: AlbumBody, user: str = Depends(current_use
 
 @app.delete("/api/albums/{album_id}")
 def delete_album(album_id: int, user: str = Depends(current_user)) -> dict:
-    db.execute("DELETE FROM albums WHERE id=?", (album_id,))
-    return {"ok": True}
+    """删除相册本身。子相册上移一层（不会被一起删掉），照片一律不动。"""
+    row = _get_album_row(album_id)
+    parent_id = row["parent_id"]
+    promoted = db.count("SELECT COUNT(*) FROM albums WHERE parent_id=?", (album_id,))
+    with db.write() as conn:
+        conn.execute("UPDATE albums SET parent_id=? WHERE parent_id=?", (parent_id, album_id))
+        conn.execute("DELETE FROM albums WHERE id=?", (album_id,))
+    return {"ok": True, "promoted_children": promoted}
 
 
 @app.post("/api/albums/{album_id}/cover")
@@ -1004,9 +1118,7 @@ def add_album_items(album_id: int, body: dict = Body(...), user: str = Depends(c
 def album_detail(
     album_id: int, cursor: str | None = None, limit: int = 200, user: str = Depends(current_user)
 ) -> dict:
-    album = db.query_one("SELECT * FROM albums WHERE id=?", (album_id,))
-    if not album:
-        raise HTTPException(status_code=404, detail="相册不存在")
+    album = _get_album_row(album_id)
     clauses = ["a.is_trashed=0", "a.id IN (SELECT asset_id FROM album_items WHERE album_id=?)"]
     params: list[Any] = [album_id]
     page = max(1, min(limit, 500))
@@ -1035,7 +1147,12 @@ def album_detail(
         params + [page],
     )
     return {
-        "album": dict(album),
+        "album": _album_payload(album),
+        "breadcrumb": _album_breadcrumb(album_id),
+        "sub_albums": [
+            _album_payload(r)
+            for r in db.query("SELECT * FROM albums WHERE parent_id=? ORDER BY name", (album_id,))
+        ],
         "items": [_asset_dict(r) for r in rows],
         "next_cursor": _encode_cursor(rows[-1]) if len(rows) == page else None,
     }

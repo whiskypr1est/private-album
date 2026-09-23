@@ -53,6 +53,15 @@ public final class Responses {
         @SerializedName("album") public Album album;
         @SerializedName("items") public List<Asset> items = new ArrayList<>();
         @SerializedName("next_cursor") public String nextCursor;
+        /** 直接子相册（不含更深层） */
+        @SerializedName("sub_albums") public List<Album> subAlbums = new ArrayList<>();
+        /** 从根到当前相册的路径，用于显示「Patreon / 小红（jw）」 */
+        @SerializedName("breadcrumb") public List<Breadcrumb> breadcrumb = new ArrayList<>();
+    }
+
+    public static class Breadcrumb {
+        @SerializedName("id") public long id;
+        @SerializedName("name") public String name;
     }
 
     public static class Stats {
