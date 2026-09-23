@@ -11,7 +11,7 @@ import secrets
 from pathlib import Path
 
 APP_NAME = "PhotoAlbum"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 
 # --- paths ---------------------------------------------------------------
 HOME = Path(os.environ.get("PHOTOALBUM_HOME", Path.home() / "photoalbum"))
