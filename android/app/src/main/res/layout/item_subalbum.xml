@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 相册详情页顶部横向排列的「子相册」卡片 -->
+<!-- 子相册卡片：作为网格里的一格（宽度由 GridLayoutManager 决定） -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="132dp"
+    android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="?attr/selectableItemBackground"
     android:gravity="center_horizontal"
@@ -10,8 +10,8 @@
 
     <com.privatealbum.app.widget.SquareImageView
         android:id="@+id/cover"
-        android:layout_width="112dp"
-        android:layout_height="112dp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
         android:background="@drawable/bg_thumb"
         android:contentDescription="@string/subalbum_section"
         android:scaleType="centerCrop" />

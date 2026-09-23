@@ -119,4 +119,6 @@
     <string name="album_subtitle_children">%1$d 个子相册 · %2$d 张</string>
     <string name="album_subtitle_photos">%1$d 张</string>
     <string name="album_photos_section">照片</string>
+    <string name="album_photos_empty_hint">还没有照片，点右下角「+」上传</string>
+    <string name="subalbum_created">已新建子相册「%1$s」</string>
 </resources>

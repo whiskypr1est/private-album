@@ -18,46 +18,20 @@
         android:id="@+id/breadcrumb"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:ellipsize="middle"
+        android:maxLines="1"
         android:paddingStart="16dp"
         android:paddingEnd="16dp"
         android:paddingBottom="4dp"
-        android:ellipsize="middle"
-        android:maxLines="1"
         android:textColor="@color/text_secondary"
         android:textSize="12sp"
         android:visibility="gone" />
 
-    <!-- 子相册区：没有子相册时整块隐藏 -->
-    <LinearLayout
-        android:id="@+id/subAlbumsSection"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:visibility="gone">
-
-        <TextView
-            android:id="@+id/subAlbumsTitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingStart="16dp"
-            android:paddingTop="4dp"
-            android:paddingEnd="16dp"
-            android:text="@string/subalbum_section"
-            android:textColor="@color/text_primary"
-            android:textSize="14sp"
-            android:textStyle="bold" />
-
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/subAlbumsRecycler"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:clipToPadding="false"
-            android:orientation="horizontal"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp" />
-    </LinearLayout>
-
-    <!-- weight=1：上面的面包屑/子相册区出现时，照片网格自动让出高度 -->
+    <!--
+      子相册与照片共用这一个可滚动的网格（靠 spanSizeLookup 让分组标题占满整行）。
+      这样做是因为：拆成两个 RecyclerView 时，子相册区一旦变高就会把照片区挤没，
+      而且横向条一屏只放得下两张，用户看不出还能滑。
+    -->
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -73,18 +47,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:clipToPadding="false"
-                android:paddingBottom="72dp" />
+                android:paddingBottom="88dp" />
         </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
-
-        <TextView
-            android:id="@+id/empty"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:gravity="center"
-            android:text="@string/album_blank_hint"
-            android:textColor="@color/text_secondary"
-            android:visibility="gone" />
 
         <com.google.android.material.floatingactionbutton.FloatingActionButton
             android:id="@+id/fabAdd"
