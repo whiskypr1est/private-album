@@ -288,6 +288,18 @@ def explicit_sort_key(index: int) -> str:
     return f"~{n:012d}"
 
 
+def mark_thumb_pending(asset_id: int) -> None:
+    """把缩略图状态打回 pending，让后台重新生成。
+
+    用于「文件不在、但状态还写着 ready」的自愈场景：
+    不这么做的话，缩略图一旦被外部删掉就永远不会重建，界面一直显示灰占位图。
+    """
+    db.execute(
+        "UPDATE assets SET thumb_state='pending', thumb_error=NULL WHERE id=?",
+        (asset_id,),
+    )
+
+
 def backfill_sort_keys() -> int:
     """把老数据里不正确的 name_sort_key 补成真正的自然排序键。
 
@@ -484,11 +496,44 @@ def retry_failed_thumbs() -> int:
     return len(rows)
 
 
+def enqueue_missing_thumbs() -> int:
+    """把「状态不是 ready」或「缩略图文件其实不存在」的资源重新排队。返回排队数。
+
+    ★为什么必须有这一步★
+    转码队列是内存里的，重启就清空；而扫描器对「文件没变」的资源会走跳过分支
+    （scan_full 里的 skipped 计数），压根不会调 upsert_asset，也就不会重新排队。
+    两者一叠加就是：缩略图文件被删掉之后只要重启一次，它们就永远不会再被生成，
+    App 一直显示灰格子 —— 这个坑真踩过（492 张就是这么丢的）。
+    所以启动时主动扫一遍状态，把缺的补上。
+    """
+    queued = 0
+    for row in db.query("SELECT id, thumb_state FROM assets WHERE is_trashed=0"):
+        aid = int(row["id"])
+        if (row["thumb_state"] == "ready"
+                and media_ops.thumb_path(aid, config.DEFAULT_THUMB_SIZE).exists()):
+            continue
+        if row["thumb_state"] != "pending":
+            db.execute(
+                "UPDATE assets SET thumb_state='pending', thumb_error=NULL WHERE id=?",
+                (aid,),
+            )
+        enqueue(aid)
+        queued += 1
+    if queued:
+        log.info("startup: re-queued %d assets with missing thumbnails", queued)
+    return queued
+
+
 def start_worker() -> None:
     global _worker, _running
     if _worker and _worker.is_alive():
         return
     _running = True
+    # 先把上次没做完/丢掉的缩略图任务补排上，再启动消费线程
+    try:
+        enqueue_missing_thumbs()
+    except Exception:  # noqa: BLE001
+        log.exception("startup: enqueue_missing_thumbs 失败（不影响服务启动）")
     _worker = threading.Thread(target=_loop, name="media-worker", daemon=True)
     _worker.start()
     log.info("media worker started")
@@ -727,12 +772,42 @@ def cleanup_orphans() -> dict:
     return result
 
 
-def rebuild_all_thumbs() -> int:
+def rebuild_all_thumbs(asset_ids: list[int] | None = None) -> int:
+    """重建缩略图。返回排队数量。
+
+    ★两种模式，务必分清★
+      asset_ids=None  -> 全库重建：删掉整个库的缩略图文件、把所有可见资源
+                         打回 pending 重新生成。代价大，而且重建期间界面会
+                         显示灰色占位图。只给用户手动触发用。
+      asset_ids=[...] -> 只重建指定资源（空列表就是不做事）。
+                         测试、单张修复都用这个，不会波及别人。
+
+    参数用 None 和 [] 区分「全部」与「什么都不做」，不要写成 `if asset_ids:`
+    —— 那样空列表会掉进「全部」分支，测试一跑就把用户的缩略图全删了。
+    """
+    if asset_ids is not None:
+        targets = [int(i) for i in asset_ids]
+        for aid in targets:
+            for size in config.THUMB_SIZES:
+                media_ops.thumb_path(aid, size).unlink(missing_ok=True)
+            db.execute(
+                "UPDATE assets SET thumb_state='pending', thumb_error=NULL WHERE id=?",
+                (aid,),
+            )
+            enqueue(aid)
+        return len(targets)
+
     for size in config.THUMB_SIZES:
         directory = config.thumbs_dir()
         for path in directory.rglob(f"*_{size}.jpg"):
             path.unlink(missing_ok=True)
-    return retry_failed_thumbs()
+    db.execute(
+        "UPDATE assets SET thumb_state='pending', thumb_error=NULL WHERE is_trashed=0"
+    )
+    rows = db.query("SELECT id FROM assets WHERE is_trashed=0")
+    for row in rows:
+        enqueue(row["id"])
+    return len(rows)
 
 
 def migration_plan(new_root: Path) -> dict:

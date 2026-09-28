@@ -15,7 +15,9 @@ photoalbum/deploy/local.env
 树莓派ssh.txt
 
 # ---------- 运行期数据（用户照片，属于隐私）----------
-photoalbum/data/
+# 用 data*/ 而不是 data/：迁移时会在旁边留下 data.on-sd-backup 这类
+# 明文副本（几百 MB 的真实照片），只写 data/ 匹配不到它，会直接推上公开仓库。
+photoalbum/data*/
 photoalbum/logs/
 photoalbum/venv/
 __pycache__/
@@ -37,3 +39,11 @@ trace.log
 
 # ---------- 工具中间产物 ----------
 .dsh-vision-toolkit/
+
+# ---------- 下载的媒体与临时诊断产物 ----------
+# ⚠️ downloads/ 与 .pages/ 里是私人内容（下载的视频、抓取的页面快照、下载日志）。
+# 这个仓库是公开的，误提交会把私人文件发布出去，所以整目录忽略。
+downloads/
+.pages/
+.diag/
+.ts-backup/

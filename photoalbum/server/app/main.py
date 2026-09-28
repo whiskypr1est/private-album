@@ -17,6 +17,7 @@ import secrets
 import shutil
 import subprocess
 import threading
+import urllib.parse
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Literal
 
@@ -580,7 +581,16 @@ def _thumb_response(asset_id: int, size: int) -> Response:
     size = allowed[0]
     path = media_ops.thumb_path(asset_id, size)
     if not path.exists():
-        if row["thumb_state"] in {"pending", "failed"}:
+        # 文件不在就必须重排队重新生成，三种情况都要管：
+        #   pending / failed      -> 正常排队
+        #   ready 但文件不见了    -> 缩略图被外部删掉了（清过目录、换过盘、
+        #                            从别处恢复过数据）。以前这里既不改状态也不排队，
+        #                            结果永远返回灰格子占位图 —— 真踩过这个坑。
+        #   源文件也不在（硬盘没插）-> 不折腾，直接给占位图
+        source = library.abs_path(row["rel_path"])
+        if source.exists():
+            if row["thumb_state"] != "pending":
+                library.mark_thumb_pending(asset_id)
             library.enqueue(asset_id)
         fallback = media_ops.thumb_path(asset_id, 1024 if size == 256 else 256)
         if fallback.exists():
@@ -644,6 +654,32 @@ def _range_iterator(path: Path, start: int, length: int, chunk: int = CHUNK_SIZE
             yield block
 
 
+def content_disposition(file_name: str, *, inline: bool = True) -> str:
+    """构造 Content-Disposition 头。
+
+    ★为什么不能直接拼文件名★
+    HTTP 头的值只能是 latin-1。中文、弯引号（’）、很多符号都编不出来，
+    直接塞进去会让 Starlette 在编码响应头时抛 UnicodeEncodeError，
+    整个接口变成 500 —— 视频流的接口就这么挂过：只要文件名里有
+    `’` 或中文，App 就完全播不了那个视频（原文件明明是好的）。
+
+    按 RFC 6266 的做法：
+      · filename= 给一个剥掉非 ASCII 字符的兜底名（老客户端用）
+      · filename*=UTF-8''<百分号编码> 传原始名字（现代客户端用）
+
+    ⚠️ 这个函数必须定义在路由装饰器【之前】。
+    曾把它插在 @app.get(...) 和 asset_stream 之间，结果装饰器挂到了它身上，
+    file_name 被 FastAPI 当成必填 query 参数 —— /stream 全部 422，
+    而真正的 asset_stream 成了没有路由的普通函数。
+    """
+    kind = "inline" if inline else "attachment"
+    raw = (file_name or "file").replace('"', "'").replace("\\", "_")
+    # 兜底名：只保留 ASCII 可打印字符；全被剥光时给个占位
+    ascii_name = raw.encode("ascii", "ignore").decode("ascii").strip() or "file"
+    quoted = urllib.parse.quote(raw, safe="")
+    return f"{kind}; filename=\"{ascii_name}\"; filename*=UTF-8''{quoted}"
+
+
 @app.get("/api/assets/{asset_id}/stream")
 def asset_stream(request: Request, asset_id: int, user: str = Depends(current_user)) -> Response:
     """HTTP Range streaming so ExoPlayer/VideoView can seek without downloading."""
@@ -664,7 +700,7 @@ def asset_stream(request: Request, asset_id: int, user: str = Depends(current_us
     headers = {
         "Accept-Ranges": "bytes",
         "Cache-Control": "private, max-age=3600",
-        "Content-Disposition": f'inline; filename="{row["file_name"]}"',
+        "Content-Disposition": content_disposition(row["file_name"]),
     }
     range_header = request.headers.get("range")
     if not range_header:
@@ -1474,9 +1510,21 @@ def purge_missing(user: str = Depends(current_user)) -> dict:
 
 
 @app.post("/api/library/rebuild-thumbs")
-def rebuild_thumbs(user: str = Depends(current_user)) -> dict:
-    count = library.rebuild_all_thumbs()
-    return {"ok": True, "queued": count}
+def rebuild_thumbs(body: dict | None = Body(default=None), user: str = Depends(current_user)) -> dict:
+    """重建缩略图。
+
+    ⚠️ 不带 ids 就是【全库重建】：会删掉整个库的缩略图文件并全部重排，
+    重建期间界面显示灰色占位图，代价很大。测试脚本一律不许这样调
+    （曾经就有测试为了验证「接口返回 200」把用户 492 张缩略图全删了）。
+    测试请用 {"ids": [...]} 限定范围；{"ids": []} 表示什么都不做。
+    """
+    raw = (body or {}).get("ids")
+    if isinstance(raw, list):
+        ids: list[int] | None = [int(i) for i in raw]
+    else:
+        ids = None
+    count = library.rebuild_all_thumbs(ids)
+    return {"ok": True, "queued": count, "scope": "ids" if ids is not None else "all"}
 
 
 @app.post("/api/library/cleanup-orphans")

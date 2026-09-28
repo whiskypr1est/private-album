@@ -58,6 +58,36 @@ def _header(headers, name: str) -> str | None:
     return None
 
 
+def plain_get_status(url: str, token: str) -> int:
+    """不带 Range 头的普通 GET，返回状态码。
+
+    注意别拿 range_request(url, None, None) 当「整段请求」用 ——
+    那会拼出 `Range: bytes=-None` 这种非法头，服务器按后缀区间解析失败返回 416。
+    """
+    request = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            response.read(1024)
+            return response.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+
+
+def wait_queue_idle(timeout: float) -> bool:
+    """等后台转码队列清空。
+
+    媒体库里可能已经有别的转码任务在排队（比如刚导入的用户视频），
+    挤在一起会让后面的用例超时误判。先等队列空下来，测量才有意义。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        status, stats = call("GET", "/api/library/stats")
+        if status == 200 and not stats.get("queue_depth") and not stats.get("pending_thumbs"):
+            return True
+        time.sleep(5)
+    return False
+
+
 def range_request(url: str, start: int | None, end: int | None, token: str) -> tuple[int, dict, bytes]:
     """构造并发送 Range 请求。
 
@@ -187,7 +217,18 @@ def main() -> int:
                 check("上传 1080p 视频", status == 200 and asset, str(status))
                 if asset:
                     big_id = asset["id"]
-                    deadline = time.time() + 240
+                    # 超时给足并记录真实耗时。
+                    # 1080p 转 720p 在树莓派上是纯 CPU 活，媒体又放在 USB 机械盘上
+                    # （读写约 80MB/s），大视频转码要几分钟。
+                    # 之前给 240 秒：单独跑够用，但「连着跑完前几个套件、队列里还有任务」时
+                    # 就不够，于是出现「单独跑能过、连跑就挂」的假失败。
+                    # 先等队列清空再计时：否则会和库里其它转码任务抢 CPU，
+                    # 900 秒也可能跑不完，那测的是「排队等了多久」而不是「转码要多久」。
+                    idle = wait_queue_idle(1800)
+                    check("后台转码队列已清空（下面的耗时才有意义）", idle,
+                          "队列一直忙，耗时会被排队拉长")
+                    deadline = time.time() + 900
+                    started = time.time()
                     ready = False
                     while time.time() < deadline:
                         status, detail = call("GET", f"/api/assets/{big_id}")
@@ -195,7 +236,9 @@ def main() -> int:
                             ready = True
                             break
                         time.sleep(5)
-                    check("已生成 720p 代理（has_proxy）", ready, str(detail.get("proxy_state")))
+                    elapsed = time.time() - started
+                    check(f"已生成 720p 代理（has_proxy，耗时 {elapsed:.0f} 秒）", ready,
+                          str(detail.get("proxy_state")))
                     if ready:
                         stream = BASE + f"/api/assets/{big_id}/stream"
                         status, headers, chunk = range_request(stream, 0, 1023, token)
@@ -205,6 +248,47 @@ def main() -> int:
                             BASE + f"/api/assets/{big_id}/stream?original=1", 0, 1023, token)
                         check("original=1 可强制播原片", status == 206, str(status))
                     call("DELETE", f"/api/assets/{big_id}")
+
+    # ------------------------------------------------------------------
+    section("非 ASCII 文件名（回归：弯引号/中文曾经让 /stream 直接 500）")
+    # HTTP 头的值只能是 latin-1。文件名里的 ’ 和中文都编不出来，
+    # 之前手拼 Content-Disposition 会让 Starlette 编码响应头时抛
+    # UnicodeEncodeError，接口整个 500 —— 表现就是「文件名带弯引号或中文的
+    # 视频完全播不了」，而原文件明明是好的。
+    # 这个 bug 一直没被测出来，是因为原有用例全都用 e2e_big1080.mp4 这种纯 ASCII 名。
+    tricky_names = [
+        "e2e_弯引号’测试.mp4",       # 弯引号 U+2019 + 中文
+        "e2e_中文字幕.mp4",           # 纯中文
+        "e2e_ascii_baseline.mp4",     # 对照组：纯 ASCII
+    ]
+    with tempfile.TemporaryDirectory() as tmp2:
+        src = Path(tmp2) / "src.mp4"
+        if make_video(src, seconds=2, size="320x240"):
+            payload = src.read_bytes()
+            for tricky in tricky_names:
+                # force=True：三份内容相同，否则会被 SHA-256 秒传拦掉，测不到
+                status, result = upload_bytes(payload, tricky, force=True)
+                asset = result.get("asset") if isinstance(result, dict) else None
+                check(f"上传「{tricky}」", status == 200 and asset, f"{status} {str(result)[:150]}")
+                if not asset:
+                    continue
+                aid = asset["id"]
+                stream = BASE + f"/api/assets/{aid}/stream"
+                status, headers, chunk = range_request(stream, 0, 1023, token)
+                check(f"  含非 ASCII 文件名也能 Range 播放（{tricky}）",
+                      status == 206 and len(chunk) == 1024, f"HTTP {status}")
+                disp = _header(headers, "content-disposition") or ""
+                check(f"  Content-Disposition 全部是 latin-1 可编码字符（{tricky}）",
+                      bool(disp) and all(ord(c) < 256 for c in disp), disp[:70])
+                check(f"  带上了 filename* 的 UTF-8 原名（{tricky}）",
+                      "filename*=UTF-8''" in disp, disp[:70])
+                # 不带 Range 的整段请求也要能过（播放入口会先发一次）
+                whole_status = plain_get_status(stream, token)
+                check(f"  整段请求（不带 Range）也正常（{tricky}）",
+                      whole_status == 200, f"HTTP {whole_status}")
+                call("DELETE", f"/api/assets/{aid}")
+        else:
+            check("能生成非 ASCII 用例的测试视频", False, "ffmpeg 造视频失败")
 
     section("HEIC（iPhone 照片）")
     try:

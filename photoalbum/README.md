@@ -527,10 +527,11 @@ venv/bin/python server/scripts/e2e_sort_test.py
 | 铁律 | 说明 |
 |---|---|
 | 不调全局清空 | `POST /api/trash/purge`、`/api/library/purge-missing`、`/api/migrate` 一律禁止出现在测试脚本里 |
+| **不调全库重建** | **`POST /api/library/rebuild-thumbs` 不带 `ids` 就是全库重建**：删掉整个库的缩略图文件、把所有照片打回 pending，重建期间 App 显示灰格子。测试只能传 `{"ids":[...]}` 限定范围，`{"ids": []}` 表示什么都不做。曾有用例为了验证「返回 200」把用户 492 张缩略图全删了 |
 | 删除必须指名 | 只能按自己创建的资源 id 删，或按 `e2e_` 前缀过滤后删 |
 | 收尾只清自己 | 清理前先按 `e2e_` / `test_` 前缀过滤，加双重确认再删 |
 
-判断方法：脚本里搜 `trash/purge`。只有注释和只读的 `migrate/plan` 允许出现。
+判断方法：脚本里搜 `trash/purge` 和 `rebuild-thumbs`。前者只允许出现在注释里；后者必须带 `ids`。
 
 ### 清空数据重来
 

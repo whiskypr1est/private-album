@@ -262,7 +262,19 @@ def main() -> int:
     status, grouped = call("GET", "/api/assets?limit=10&grouped=true")
     check("grouped=true 返回日期分组", status == 200 and "groups" in grouped, str(status))
     status, videos_only = call("GET", "/api/assets?type=video")
-    check("type=video 过滤", status == 200 and videos_only.get("count") == 0, str(videos_only.get("count")))
+    # 注意：不能断言「视频数 == 0」。库里有没有视频取决于用户传了什么，
+    # 这个用例要验证的是「过滤器有效」，所以检查返回项是否全是视频。
+    # （原来写成 count==0，用户一导入视频就必然误报失败。）
+    v_items = videos_only.get("items") or []
+    v_bad = [i.get("file_name") for i in v_items if i.get("media_type") != "video"]
+    check("type=video 过滤（返回的都是视频）", status == 200 and not v_bad,
+          f"count={videos_only.get('count')} 混入非视频={v_bad}")
+
+    status, images_only = call("GET", "/api/assets?type=image")
+    i_items = images_only.get("items") or []
+    i_bad = [i.get("file_name") for i in i_items if i.get("media_type") != "image"]
+    check("type=image 过滤（返回的都是图片）", status == 200 and not i_bad,
+          f"count={images_only.get('count')} 混入非图片={i_bad}")
     status, searched = call("GET", "/api/assets?q=e2e_exif")
     check("按文件名搜索", status == 200 and searched.get("count", 0) >= 1, str(searched.get("count")))
     status, fav_search = call("GET", "/api/assets?q=is:fav")
@@ -345,8 +357,28 @@ def main() -> int:
     check("丢失文件列表可用", status == 200 and missing.get("count") == 0, str(missing)[:200])
     status, plan = call("POST", "/api/library/migrate/plan", {"target_root": "/mnt/usb"})
     check("外接硬盘迁移预演", status == 200 and "library_bytes" in plan, f"{status} {str(plan)[:200]}")
-    status, rebuild = call("POST", "/api/library/rebuild-thumbs")
-    check("触发重建缩略图", status == 200, str(status))
+    # ⚠️⚠️ 这里绝对不能不带 ids 调用 ⚠️⚠️
+    # 不带 ids 是【全库重建】：会删掉整个库的缩略图文件、把所有照片打回 pending，
+    # 重建期间 App 显示灰色占位图。曾经这个用例为了验证「接口返回 200」
+    # 就把用户 492 张缩略图全删了 —— 测试不该对真实库做全局破坏性操作。
+    # {"ids": []} 表示什么都不做，只验证路由与语义。
+    status, rebuild = call("POST", "/api/library/rebuild-thumbs", {"ids": []})
+    check("重建缩略图接口可用（空 ids = 不动任何资源）",
+          status == 200 and rebuild.get("scope") == "ids" and rebuild.get("queued") == 0,
+          str(rebuild)[:160])
+
+    # 限定范围的重建要真的能用：拿本次测试自己上传的图试，不碰别人的
+    status, mine = call("GET", "/api/assets?q=e2e_exif&limit=1")
+    my_items = mine.get("items") or []
+    if my_items:
+        my_id = my_items[0]["id"]
+        status, rebuild2 = call("POST", "/api/library/rebuild-thumbs", {"ids": [my_id]})
+        check("限定范围重建缩略图可用（只重排指定资源）",
+              status == 200 and rebuild2.get("scope") == "ids"
+              and rebuild2.get("queued") == 1,
+              str(rebuild2)[:160])
+    else:
+        check("限定范围重建缩略图可用（只重排指定资源）", False, "找不到本次测试的 e2e_exif 资源")
 
     section("错误处理")
     status, _ = call("GET", "/api/assets/999999")
