@@ -553,7 +553,14 @@ def _loop() -> None:
                 _queue_lock.wait(timeout=2.0)
             if not _running:
                 return
-            asset_id, kind = _queue.pop(0)
+            # ★缩略图插队★
+            # 转码一个 1080p 视频要几分钟，而 worker 只有一个、串行处理。
+            # 纯 FIFO 的话，队列里排着几个转码任务就会把后面**所有**缩略图任务
+            # 一起堵死 —— 表现就是导入了大视频之后，界面网格长时间一片灰格子
+            # （实际见过：一个视频的缩略图等十几分钟还没做出来）。
+            # 缩略图是界面必须的，代理只是后台优化，所以让缩略图先做。
+            idx = next((i for i, item in enumerate(_queue) if item[1] != "proxy"), 0)
+            asset_id, kind = _queue.pop(idx)
         try:
             if kind == "proxy":
                 build_proxy(asset_id)
