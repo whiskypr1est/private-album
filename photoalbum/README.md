@@ -545,6 +545,8 @@ venv/bin/python server/scripts/e2e_sort_test.py
 | 视频**永远**卡在 `proxy_state=pending`，谁也不管 | 重启后 `enqueue_missing_thumbs()` 会补排缩略图，但**代理没有对应的兜底**；而视频的缩略图早就是 `ready`，那个函数一看 ready 就跳过，根本走不到 `process_asset` 里 `enqueue(kind="proxy")` 那一行 —— 转码转一半被重启打断的视频就此永久搁浅（实测 961/962 两个 1080p 一直 pending，手机只能直连 170MB 原片硬播） | 新增 `enqueue_missing_proxies()`，在 `start_worker()` 里跟着一起调；判定条件是「分辨率高于阈值 且 (没代理 或 代理文件不在) 且 状态不是 ready」，并把 `running` 也当成「被中断」一并补排 |
 | 视频传上去了，但手机 App 里**一个都看不到** | 这 7 个视频**不属于任何相册**。App 的首页只有「相册 / 收藏 / 更多」三个页签，没有「全部照片」，所以「在库里但没有相册归属」的资源在 App 里等于隐身（`/api/assets` 里明明排在最前面） | 建了子相册 `H69 Verse`（挂在 `Patreon` 下）并把 7 个视频放进去；排查同类问题的口诀：**App 看不到 = 先查 `album_items` 里有没有它**，而不是先怀疑缩略图或转码 |
 | 手写脚本查「视频有没有相册」时全报「无相册」 | `/api/assets` 的过滤参数叫 **`type`**（`Query(alias="type")`）而不是 `media_type`；写成 `?media_type=video` 时 FastAPI 不认这个参数、**静默忽略**，于是返回全部资源，脚本把它全当成视频，自然个个「无相册」 | 查库时用 `?type=video`；判断「有没有这个参数」别靠返回数量猜，先确认参数名 |
+| 手机上点开视频，**画面死死顶在屏幕最上面一条**，下面一大片全黑 | App 侧的 bug，不在服务端：`VideoView` 在 `match_parent` 下会按视频宽高比把**自己缩掉**（AOSP `onMeasure` 里的 `for compatibility, we adjust size based on aspect ratio`，1920×1080 放在 1080 宽的竖屏上量出来是 1080×607），而 `FrameLayout` 的子 View 默认贴左上角 | App 侧给 `VideoView` 加 `layout_gravity="center"`，并补上进度条 / 播放暂停 / ±10 秒 / 全屏横屏控件（APK v1.4.0）。服务端不用改，但有一个前提：`/stream` 必须支持 HTTP Range，否则拖进度条会失效 |
+| 一行多个视频时，滑到第 2 个**第 1 个还在后台响** | `offscreenPageLimit=1` 让相邻页都活着，每页各自 `start()` 了 | App 侧在 `onPageSelected` 里把非当前页 `pause()`；服务端无关 |
 
 ### ⚠️ 测试脚本安全约定（务必遵守）
 

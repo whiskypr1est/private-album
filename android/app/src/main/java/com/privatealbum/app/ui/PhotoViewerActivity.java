@@ -39,6 +39,10 @@ public class PhotoViewerActivity extends AppCompatActivity {
     public static final String EXTRA_INDEX = "index";
     public static final int REQUEST_EDIT = 1001;
 
+    private static final String STATE_INDEX = "viewer_index";
+    private static final String STATE_VIDEO_ID = "viewer_video_id";
+    private static final String STATE_VIDEO_POS = "viewer_video_pos";
+
     private ViewPager2 pager;
     private TextView title;
     private TextView counter;
@@ -49,6 +53,13 @@ public class PhotoViewerActivity extends AppCompatActivity {
     private List<Asset> items = new ArrayList<>();
     private Adapter adapter;
     private boolean barsVisible = true;
+    /** 删除悬浮按钮的预期可见性（XML 里默认是 gone，点一下画面才出来）。 */
+    private boolean deleteVisible = false;
+    /** 转屏前正在播的那个视频和位置，转回来接着播。 */
+    private long pendingVideoId = -1;
+    private int pendingVideoPos = 0;
+    /** 当前展示的那一页（onPageSelected 时记下来，转屏存状态要用）。 */
+    private Holder currentHolder;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -72,6 +83,12 @@ public class PhotoViewerActivity extends AppCompatActivity {
             items = new ArrayList<>((List<Asset>) serializable);
         }
         int start = getIntent().getIntExtra(EXTRA_INDEX, 0);
+        if (savedInstanceState != null) {
+            // 转屏重建：回到原来那一张，视频还要接着原来的位置播
+            start = savedInstanceState.getInt(STATE_INDEX, start);
+            pendingVideoId = savedInstanceState.getLong(STATE_VIDEO_ID, -1);
+            pendingVideoPos = savedInstanceState.getInt(STATE_VIDEO_POS, 0);
+        }
 
         adapter = new Adapter();
         pager.setAdapter(adapter);
@@ -80,6 +97,17 @@ public class PhotoViewerActivity extends AppCompatActivity {
             @Override
             public void onPageSelected(int position) {
                 updateHeader(position);
+                // ★滑走的那一页必须停下来★
+                // offscreenPageLimit=1，相邻页是活着的。要是不管，
+                // 一行 7 个视频就会变成「滑到第 2 个，第 1 个还在后台响」。
+                for (Holder h : adapter.liveHolders()) {
+                    if (h.getBindingAdapterPosition() == position) {
+                        currentHolder = h;
+                        h.onBecameCurrent();
+                    } else {
+                        h.onBecameHidden();
+                    }
+                }
             }
         });
         if (start > 0 && start < items.size()) {
@@ -120,13 +148,23 @@ public class PhotoViewerActivity extends AppCompatActivity {
             sb.append(" · ").append(asset.resolutionText());
         }
         counter.setText(sb);
+        applyBottomBars(asset.isVideo());
+    }
+
+    /**
+     * 底部那两样东西（张数药丸 + 删除悬浮按钮）要跟视频控件条抢位置。
+     * 看视频的时候先让位：进度条和播放键比它们重要，而且张数在顶栏里已经写了。
+     */
+    private void applyBottomBars(boolean isVideo) {
+        counter.setVisibility(isVideo || !barsVisible ? View.GONE : View.VISIBLE);
+        deleteButton.setVisibility(isVideo || !deleteVisible ? View.GONE : View.VISIBLE);
     }
 
     private void toggleBars() {
         barsVisible = !barsVisible;
         topBar.setVisibility(barsVisible ? View.VISIBLE : View.GONE);
-        counter.setVisibility(barsVisible ? View.VISIBLE : View.GONE);
-        deleteButton.setVisibility(barsVisible ? View.VISIBLE : View.GONE);
+        deleteVisible = barsVisible;
+        applyBottomBars(current() != null && current().isVideo());
     }
 
     private void editCurrent() {
@@ -429,18 +467,36 @@ public class PhotoViewerActivity extends AppCompatActivity {
     // ------------------------------------------------------------ 适配器
     private class Adapter extends RecyclerView.Adapter<Holder> {
 
+        /** 当前活着（已创建、还没被回收）的 Holder，用来控制「谁在播」。 */
+        private final List<Holder> live = new ArrayList<>();
+
+        List<Holder> liveHolders() {
+            return live;
+        }
+
         @NonNull
         @Override
         public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
             View view = LayoutInflater.from(parent.getContext())
                     .inflate(R.layout.item_viewer, parent, false);
-            return new Holder(view);
+            Holder holder = new Holder(view);
+            live.add(holder);
+            return holder;
         }
 
         @Override
         public void onBindViewHolder(@NonNull Holder holder, int position) {
             Asset asset = items.get(position);
             holder.bind(asset);
+        }
+
+        @Override
+        public void onViewRecycled(@NonNull Holder holder) {
+            super.onViewRecycled(holder);
+            // 被回收的页必须释放播放器：否则解码器一直被占着，
+            // 翻过几十张之后就会「播放失败」。
+            live.remove(holder);
+            holder.releasePlayer();
         }
 
         @Override
@@ -455,43 +511,65 @@ public class PhotoViewerActivity extends AppCompatActivity {
         final ImageButton playButton;
         final ProgressBar progress;
 
+        // ---- 视频控件 ----
+        final View videoLayer;
+        final View videoControls;
+        final android.widget.SeekBar seekBar;
+        final ImageButton btnPlayPause;
+        final ImageButton btnFullscreen;
+        final TextView videoTime;
+        final TextView btnRewind;
+        final TextView btnForward;
+
+        private final android.os.Handler handler =
+                new android.os.Handler(android.os.Looper.getMainLooper());
+        private Runnable ticker;
+        /**
+         * 播放中 4 秒后自动收起控件条。
+         * 注意：只能在构造函数里赋值 —— 写成字段初始化
+         * `private final Runnable autoHide = () -> { ... video ... }`
+         * 会因为「video 这个 final 字段还没赋值」直接编译不过。
+         */
+        private final Runnable autoHide;
+        /** 用户是不是正在拖进度条 —— 拖的时候别让 ticker 跟我们抢滑块。 */
+        private boolean dragging;
+        private boolean prepared;
+        private boolean controlsVisible;
+        /** 期望「正在播」—— 用来驱动进度表，见 tick() 的说明。 */
+        private boolean ticking;
+
         Holder(View itemView) {
             super(itemView);
             image = itemView.findViewById(R.id.image);
             video = itemView.findViewById(R.id.video);
             playButton = itemView.findViewById(R.id.playButton);
             progress = itemView.findViewById(R.id.loading);
+            videoLayer = itemView.findViewById(R.id.videoLayer);
+            videoControls = itemView.findViewById(R.id.videoControls);
+            seekBar = itemView.findViewById(R.id.seekBar);
+            btnPlayPause = itemView.findViewById(R.id.btnPlayPause);
+            btnFullscreen = itemView.findViewById(R.id.btnFullscreen);
+            videoTime = itemView.findViewById(R.id.videoTime);
+            btnRewind = itemView.findViewById(R.id.btnRewind);
+            btnForward = itemView.findViewById(R.id.btnForward);
+            autoHide = () -> {
+                if (video.isPlaying()) {
+                    setControlsVisible(false);
+                }
+            };
+            // 控件条要避开导航栏（用 padding 而不是 margin：底衬渐变才能一直铺到屏幕边）
+            com.privatealbum.app.util.SystemBars.padBottom(videoControls);
+            itemView.findViewById(R.id.videoTapLayer).setOnClickListener(v -> toggleControls());
         }
 
         void bind(Asset asset) {
             progress.setVisibility(View.GONE);
             if (asset.isVideo()) {
-                image.setVisibility(View.GONE);
-                video.setVisibility(View.VISIBLE);
-                playButton.setVisibility(View.VISIBLE);
-                String url = api.streamUrl(asset);
-                android.net.Uri uri = android.net.Uri.parse(url);
-                video.setVideoURI(uri);
-                video.setOnPreparedListener(mp -> {
-                    progress.setVisibility(View.GONE);
-                    playButton.setVisibility(View.GONE);
-                    mp.setLooping(false);
-                    video.start();
-                });
-                video.setOnErrorListener((mp, what, extra) -> {
-                    progress.setVisibility(View.GONE);
-                    Ui.toast(PhotoViewerActivity.this, "视频播放失败（what=" + what + "）");
-                    playButton.setVisibility(View.VISIBLE);
-                    return true;
-                });
-                playButton.setOnClickListener(v -> {
-                    progress.setVisibility(View.VISIBLE);
-                    video.start();
-                });
+                bindVideo(asset);
             } else {
-                video.setVisibility(View.GONE);
-                playButton.setVisibility(View.GONE);
+                releasePlayer();
                 image.setVisibility(View.VISIBLE);
+                videoLayer.setVisibility(View.GONE);
                 progress.setVisibility(View.VISIBLE);
                 Glide.with(PhotoViewerActivity.this)
                         .load(api.previewUrl(asset))
@@ -529,6 +607,286 @@ public class PhotoViewerActivity extends AppCompatActivity {
                 });
             }
         }
+
+        // ------------------------------------------------------------ 视频
+        private void bindVideo(Asset asset) {
+            // 这个 Holder 可能刚被回收来放另一个视频，先把上一次的进度表和状态归零，
+            // 否则会拿着上一页的 ticking 继续跑，图标和时间都不对
+            stopTicker();
+            image.setVisibility(View.GONE);
+            videoLayer.setVisibility(View.VISIBLE);
+            playButton.setVisibility(View.GONE);
+            progress.setVisibility(View.VISIBLE);
+            setControlsVisible(false);
+
+            prepared = false;
+            dragging = false;
+            seekBar.setProgress(0);
+            seekBar.setMax(1000);           // 还没拿到时长，先用个占位量程
+            videoTime.setText("--:-- / --:--");
+            syncPlayPauseIcon();
+            updateFullscreenIcon();
+
+            video.setVideoURI(android.net.Uri.parse(api.streamUrl(asset)));
+            video.setOnPreparedListener(mp -> {
+                prepared = true;
+                progress.setVisibility(View.GONE);
+                mp.setLooping(false);
+                seekBar.setMax(Math.max(1, video.getDuration()));
+                // 只有「当前这一页」才自动播 —— 见 onBecameCurrent 的说明
+                long resume = pendingResumePosition(asset);
+                if (resume > 0) {
+                    video.seekTo((int) resume);
+                }
+                if (isCurrentPage()) {
+                    video.start();
+                    tick();                 // 立刻刷一次时间，别等半秒
+                    setControlsVisible(true);
+                } else {
+                    syncPlayPauseIcon();
+                }
+            });
+            video.setOnCompletionListener(mp -> {
+                stopTicker();
+                seekBar.setProgress(seekBar.getMax());
+                videoTime.setText(fmt(video.getDuration()) + " / " + fmt(video.getDuration()));
+                syncPlayPauseIcon();
+                setControlsVisible(true);
+                playButton.setVisibility(View.VISIBLE);
+            });
+            video.setOnErrorListener((mp, what, extra) -> {
+                progress.setVisibility(View.GONE);
+                stopTicker();
+                Ui.toast(PhotoViewerActivity.this, getString(R.string.video_play_failed) + "（" + what + "）");
+                playButton.setVisibility(View.VISIBLE);
+                setControlsVisible(true);
+                return true;
+            });
+
+            playButton.setOnClickListener(v -> {
+                playButton.setVisibility(View.GONE);
+                progress.setVisibility(View.VISIBLE);
+                togglePlay();
+            });
+            btnPlayPause.setOnClickListener(v -> togglePlay());
+            btnRewind.setOnClickListener(v -> seekBy(-10_000));
+            btnForward.setOnClickListener(v -> seekBy(10_000));
+            btnFullscreen.setOnClickListener(v -> toggleFullscreen());
+
+            seekBar.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(android.widget.SeekBar bar, int value, boolean fromUser) {
+                    if (fromUser) {
+                        videoTime.setText(fmt(value) + " / " + fmt(video.getDuration()));
+                    }
+                }
+
+                @Override
+                public void onStartTrackingTouch(android.widget.SeekBar bar) {
+                    dragging = true;
+                    handler.removeCallbacks(autoHide);
+                }
+
+                @Override
+                public void onStopTrackingTouch(android.widget.SeekBar bar) {
+                    dragging = false;
+                    video.seekTo(bar.getProgress());
+                    if (!video.isPlaying()) {
+                        // 拖完顺手接着放，符合直觉
+                        video.start();
+                    }
+                    tick();
+                    scheduleAutoHide();
+                }
+            });
+        }
+
+        /** 这一页是不是当前正在展示的那一页。 */
+        private boolean isCurrentPage() {
+            int pos = getBindingAdapterPosition();
+            return pos != RecyclerView.NO_POSITION && pos == currentIndex();
+        }
+
+        private void togglePlay() {
+            if (!prepared) {
+                progress.setVisibility(View.VISIBLE);
+                video.start();
+                return;
+            }
+            if (video.isPlaying()) {
+                video.pause();
+                setControlsVisible(true);   // 暂停了就把控件留在屏幕上
+                stopTicker();
+            } else {
+                playButton.setVisibility(View.GONE);
+                if (seekBar.getProgress() >= seekBar.getMax() && seekBar.getMax() > 0) {
+                    video.seekTo(0);        // 放完了再点，从头开始
+                }
+                video.start();
+                tick();
+                scheduleAutoHide();
+            }
+            syncPlayPauseIcon();
+        }
+
+        private void seekBy(int deltaMs) {
+            if (!prepared) {
+                return;
+            }
+            int target = Math.max(0, Math.min(video.getDuration(), video.getCurrentPosition() + deltaMs));
+            video.seekTo(target);
+            seekBar.setProgress(target);
+            videoTime.setText(fmt(target) + " / " + fmt(video.getDuration()));
+            setControlsVisible(true);
+        }
+
+        private void toggleControls() {
+            setControlsVisible(!controlsVisible);
+        }
+
+        private void setControlsVisible(boolean visible) {
+            controlsVisible = visible;
+            handler.removeCallbacks(autoHide);
+            videoControls.setVisibility(visible ? View.VISIBLE : View.GONE);
+            // 播放中且用户没在拖，才自动隐藏；暂停时控件一直留着
+            if (visible && video.isPlaying() && !dragging) {
+                scheduleAutoHide();
+            }
+        }
+
+        private void scheduleAutoHide() {
+            handler.removeCallbacks(autoHide);
+            handler.postDelayed(autoHide, 4000);
+        }
+
+        /**
+         * 图标跟的是 ticking（我们的意图），不是 isPlaying()：
+         * 缓冲的那一两秒 isPlaying() 也是 false，用它会看到按钮在播/停之间反复横跳。
+         */
+        private void syncPlayPauseIcon() {
+            btnPlayPause.setImageResource(ticking ? R.drawable.ic_pause : R.drawable.ic_play);
+        }
+
+        /** 每 500ms 刷一次进度。
+         *
+         * ★别用「isPlaying() 为假就停表」★
+         * 缓冲、拖动、切后台时 isPlaying() 都会短暂变假，一停表就再也回不来 ——
+         * 表现是网速慢的时候进度条走到一半卡住不动了。
+         * 所以用 ticking 表示「我们期望它在播」，只有用户按暂停 / 滑走 / 播完 /
+         * 被回收时才停。
+         */
+        private void tick() {
+            handler.removeCallbacks(ticker);
+            ticking = true;
+            ticker = () -> {
+                if (!ticking) {
+                    return;
+                }
+                if (!dragging && prepared) {
+                    int pos = video.getCurrentPosition();
+                    seekBar.setProgress(pos);
+                    videoTime.setText(fmt(pos) + " / " + fmt(video.getDuration()));
+                }
+                syncPlayPauseIcon();
+                handler.postDelayed(ticker, 500);
+            };
+            handler.post(ticker);
+        }
+
+        private void stopTicker() {
+            ticking = false;
+            if (ticker != null) {
+                handler.removeCallbacks(ticker);
+                ticker = null;
+            }
+        }
+
+        /** 滑到这一页：自动播。 */
+        void onBecameCurrent() {
+            if (videoLayer.getVisibility() != View.VISIBLE) {
+                return;                     // 这一页是图片
+            }
+            if (!prepared) {
+                return;                     // 还没准备好，onPrepared 里会接手
+            }
+            if (!video.isPlaying()) {
+                playButton.setVisibility(View.GONE);
+                if (seekBar.getProgress() >= seekBar.getMax() && seekBar.getMax() > 0) {
+                    video.seekTo(0);
+                }
+                video.start();
+            }
+            tick();
+            setControlsVisible(true);
+        }
+
+        /** 滑走了：必须停下，否则相邻页（offscreenPageLimit=1）会一起响。 */
+        void onBecameHidden() {
+            if (prepared && video.isPlaying()) {
+                video.pause();
+            }
+            stopTicker();
+            if (prepared) {
+                int pos = video.getCurrentPosition();
+                seekBar.setProgress(pos);
+                videoTime.setText(fmt(pos) + " / " + fmt(video.getDuration()));
+            }
+            syncPlayPauseIcon();
+            setControlsVisible(false);
+        }
+
+        /** 被回收：彻底释放播放器，别占着解码器不放。 */
+        void releasePlayer() {
+            stopTicker();
+            handler.removeCallbacksAndMessages(null);
+            try {
+                video.stopPlayback();
+            } catch (Exception ignored) {
+            }
+            prepared = false;
+        }
+
+        private void updateFullscreenIcon() {
+            btnFullscreen.setImageResource(isLandscape()
+                    ? R.drawable.ic_fullscreen_exit : R.drawable.ic_fullscreen);
+            btnFullscreen.setContentDescription(getString(
+                    isLandscape() ? R.string.video_exit_fullscreen : R.string.video_fullscreen));
+        }
+    }
+
+    private boolean isLandscape() {
+        return getResources().getConfiguration().orientation
+                == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+    }
+
+    private void toggleFullscreen() {
+        setRequestedOrientation(isLandscape()
+                ? android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                : android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+    }
+
+    private static String fmt(int ms) {
+        if (ms < 0) {
+            ms = 0;
+        }
+        int total = ms / 1000;
+        int h = total / 3600;
+        int m = (total % 3600) / 60;
+        int s = total % 60;
+        return h > 0
+                ? String.format(java.util.Locale.US, "%d:%02d:%02d", h, m, s)
+                : String.format(java.util.Locale.US, "%d:%02d", m, s);
+    }
+
+    /** 转屏后要接着播的位置（没有就返回 0）。 */
+    private long pendingResumePosition(Asset asset) {
+        if (pendingVideoId == asset.id && pendingVideoPos > 0) {
+            long pos = pendingVideoPos;
+            pendingVideoId = -1;
+            pendingVideoPos = 0;
+            return pos;
+        }
+        return 0;
     }
 
     @Override
@@ -544,6 +902,21 @@ public class PhotoViewerActivity extends AppCompatActivity {
                 }
             }
         } catch (Exception ignored) {
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
+        super.onSaveInstanceState(outState);
+        // 转屏（全屏按钮）会重建 Activity，位置得自己记住，否则会跳回第一张
+        outState.putInt(STATE_INDEX, currentIndex());
+        Asset asset = current();
+        // 用记下来的 currentHolder，而不是 getChildAt(0)：
+        // 开着 offscreenPageLimit 时第 0 个子 View 未必是当前这一页
+        if (currentHolder != null && asset != null && asset.isVideo()
+                && currentHolder.videoLayer.getVisibility() == View.VISIBLE) {
+            outState.putLong(STATE_VIDEO_ID, asset.id);
+            outState.putInt(STATE_VIDEO_POS, currentHolder.video.getCurrentPosition());
         }
     }
 }

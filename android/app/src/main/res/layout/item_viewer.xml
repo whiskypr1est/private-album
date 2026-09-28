@@ -9,25 +9,135 @@
         android:layout_height="match_parent"
         android:contentDescription="@string/app_name" />
 
-    <VideoView
-        android:id="@+id/video"
+    <!-- ================= 视频层 ================= -->
+    <FrameLayout
+        android:id="@+id/videoLayer"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:visibility="gone" />
+        android:background="@color/black"
+        android:visibility="gone">
 
-    <ImageButton
-        android:id="@+id/playButton"
-        android:layout_width="72dp"
-        android:layout_height="72dp"
-        android:layout_gravity="center"
-        android:background="?attr/selectableItemBackgroundBorderless"
-        android:contentDescription="@string/app_name"
-        android:src="@drawable/ic_play"
-        android:visibility="gone" />
+        <!--
+            ★layout_gravity="center" 千万别删★
+            VideoView 在 match_parent 下会把自己「按视频宽高比缩掉」
+            （AOSP VideoView.onMeasure 里那句 for compatibility, we adjust size
+              based on aspect ratio：1920x1080 的片子放在 1080 宽的竖屏上，
+              量出来就是 1080x607）。
+            而 FrameLayout 的子 View 默认贴左上角 —— 于是竖屏看横屏视频时，
+            画面变成死死顶在最上面的一条，下面一大片全黑。
+            加上这一句才会落在正中间（上下对称留黑边），这才是播放器该有的样子。
+        -->
+        <VideoView
+            android:id="@+id/video"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_gravity="center" />
 
-    <ProgressBar
-        android:id="@+id/loading"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center" />
+        <!-- 透明点击层：点画面 = 显示/隐藏控件（放在控件下面，不会抢控件的点击） -->
+        <View
+            android:id="@+id/videoTapLayer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clickable="true"
+            android:focusable="false" />
+
+        <ProgressBar
+            android:id="@+id/loading"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center" />
+
+        <!-- 未播放/播放结束时的中央大按钮 -->
+        <ImageButton
+            android:id="@+id/playButton"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:layout_gravity="center"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/video_play"
+            android:src="@drawable/ic_play"
+            android:visibility="gone" />
+
+        <!-- ================= 控件条 ================= -->
+        <LinearLayout
+            android:id="@+id/videoControls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:background="@drawable/bg_video_controls"
+            android:orientation="vertical"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="6dp"
+            android:visibility="gone">
+
+            <SeekBar
+                android:id="@+id/seekBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:contentDescription="@string/video_progress"
+                android:maxHeight="4dp"
+                android:minHeight="4dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:progressBackgroundTint="#59FFFFFF"
+                android:progressTint="@color/accent"
+                android:thumbTint="@color/accent" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <ImageButton
+                    android:id="@+id/btnPlayPause"
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/video_pause"
+                    android:src="@drawable/ic_pause" />
+
+                <TextView
+                    android:id="@+id/btnRewind"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:gravity="center"
+                    android:minWidth="52dp"
+                    android:text="@string/video_rewind_label"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/btnForward"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:gravity="center"
+                    android:minWidth="52dp"
+                    android:text="@string/video_forward_label"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/videoTime"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <ImageButton
+                    android:id="@+id/btnFullscreen"
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/video_fullscreen"
+                    android:src="@drawable/ic_fullscreen" />
+            </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
 </FrameLayout>

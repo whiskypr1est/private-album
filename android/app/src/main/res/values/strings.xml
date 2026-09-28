@@ -43,6 +43,18 @@
     <!-- 查看器 -->
     <string name="viewer_delete_confirm">确定要删除这张吗？删除后可在「更多 → 回收站」中恢复。</string>
 
+    <!-- 视频播放器控件 -->
+    <string name="video_play">播放</string>
+    <string name="video_pause">暂停</string>
+    <string name="video_rewind">后退 10 秒</string>
+    <string name="video_forward">前进 10 秒</string>
+    <string name="video_rewind_label">−10s</string>
+    <string name="video_forward_label">+10s</string>
+    <string name="video_fullscreen">全屏（横屏）</string>
+    <string name="video_exit_fullscreen">退出全屏（竖屏）</string>
+    <string name="video_progress">播放进度</string>
+    <string name="video_play_failed">视频播放失败</string>
+
     <!-- 编辑 -->
     <string name="edit_title">编辑照片</string>
     <string name="edit_rotate_left">左转</string>
