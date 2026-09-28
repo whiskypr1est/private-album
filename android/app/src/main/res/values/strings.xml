@@ -43,6 +43,20 @@
     <!-- 查看器 -->
     <string name="viewer_delete_confirm">确定要删除这张吗？删除后可在「更多 → 回收站」中恢复。</string>
 
+    <!-- 相册里的单张照片操作 -->
+    <string name="album_set_cover">设为相册封面</string>
+    <string name="album_cover_set">已设为相册封面</string>
+    <string name="album_move_to_other">移到其他相册…</string>
+    <string name="album_remove_from">从相册移出</string>
+    <string name="album_remove_title">要把这张移出相册吗？</string>
+    <string name="album_remove_message">「%1$s」\n\n会从「%2$s」里移除。照片本身不会被删除。\n\n移出后它就不再属于任何相册了，只能在「相册 → 全部照片」那一行里找到。\n\n只是想换个相册的话，点下面的「移到其他相册」。</string>
+    <string name="album_remove_confirm">仍然移出</string>
+    <string name="album_removed_one">已从本相册移出</string>
+    <string name="album_move_title">把「%1$s」移到</string>
+    <string name="album_moved_to">已移到「%1$s」</string>
+    <string name="album_move_failed">移动失败：</string>
+    <string name="album_no_other_album">没有别的相册可移 —— 先去「相册」页新建一个，再回来移</string>
+
     <!-- 视频播放器控件 -->
     <string name="video_play">播放</string>
     <string name="video_pause">暂停</string>

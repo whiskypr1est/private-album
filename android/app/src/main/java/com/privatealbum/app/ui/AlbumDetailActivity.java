@@ -562,21 +562,127 @@ public class AlbumDetailActivity extends AppCompatActivity {
     }
 
     private void showItemMenu(Asset asset) {
-        String[] actions = {"设为相册封面", "从相册移出"};
+        String[] actions = {
+                getString(R.string.album_set_cover),
+                getString(R.string.album_move_to_other),
+                getString(R.string.album_remove_from),
+        };
         new AlertDialog.Builder(this)
-                .setItems(actions, (dialog, which) -> new Thread(() -> {
-                    try {
-                        if (which == 0) {
-                            api.setAlbumCover(album.id, asset.id);
-                        } else {
-                            api.albumItems(album.id, java.util.Collections.singletonList(asset.id), true);
-                        }
-                        runOnUiThread(this::load);
-                    } catch (ApiException e) {
-                        runOnUiThread(() -> Ui.toast(this, e.getMessage()));
+                .setItems(actions, (dialog, which) -> {
+                    if (which == 0) {
+                        setAsAlbumCover(asset);
+                    } else if (which == 1) {
+                        movePhotoToOtherAlbum(asset);
+                    } else {
+                        confirmRemoveFromAlbum(asset);
                     }
-                }).start())
+                })
                 .show();
+    }
+
+    private void setAsAlbumCover(Asset asset) {
+        new Thread(() -> {
+            try {
+                api.setAlbumCover(album.id, asset.id);
+                runOnUiThread(() -> {
+                    Ui.toast(this, getString(R.string.album_cover_set));
+                    load();
+                });
+            } catch (ApiException e) {
+                runOnUiThread(() -> Ui.toast(this, e.getMessage()));
+            }
+        }).start();
+    }
+
+    /**
+     * 「从相册移出」必须先确认。
+     *
+     * 为什么这里要拦一下：移出之后这张照片就不属于任何相册了，虽然还没丢
+     * （「相册」页第一行的「全部照片」里能找到，入口在 AlbumsFragment.ALL_PHOTOS_ID），
+     * 但在相册里翻是翻不到的 —— 用户真的这样弄丢过一个视频（id=963），
+     * 事后以为文件被删了。所以这里把后果讲清楚，并把「移到其他相册」放在手边。
+     */
+    private void confirmRemoveFromAlbum(Asset asset) {
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.album_remove_title))
+                .setMessage(getString(R.string.album_remove_message, asset.fileName, album.name))
+                .setNegativeButton(getString(R.string.action_cancel), null)
+                .setNeutralButton(getString(R.string.album_move_to_other), (d, w) -> movePhotoToOtherAlbum(asset))
+                .setPositiveButton(getString(R.string.album_remove_confirm), (d, w) -> removeFromAlbum(asset))
+                .create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setTextColor(getResources().getColor(R.color.danger, getTheme())));
+        dialog.show();
+    }
+
+    private void removeFromAlbum(Asset asset) {
+        new Thread(() -> {
+            try {
+                api.albumItems(album.id, java.util.Collections.singletonList(asset.id), true);
+                runOnUiThread(() -> {
+                    Ui.toast(this, getString(R.string.album_removed_one));
+                    load();
+                });
+            } catch (ApiException e) {
+                runOnUiThread(() -> Ui.toastLong(this, e.getMessage()));
+            }
+        }).start();
+    }
+
+    /** 把一张照片挪到别的相册。候选里排掉当前相册自己。 */
+    private void movePhotoToOtherAlbum(Asset asset) {
+        new Thread(() -> {
+            try {
+                Responses.AlbumList result = api.albums();
+                final List<Album> all = result.albums == null ? new ArrayList<>() : result.albums;
+                final List<Album> targets = new ArrayList<>();
+                for (Album a : all) {
+                    if (a.id != album.id) {
+                        targets.add(a);
+                    }
+                }
+                runOnUiThread(() -> {
+                    if (targets.isEmpty()) {
+                        Ui.toastLong(this, getString(R.string.album_no_other_album));
+                        return;
+                    }
+                    String[] labels = new String[targets.size()];
+                    for (int i = 0; i < targets.size(); i++) {
+                        labels[i] = AlbumTree.indentedName(all, targets.get(i));
+                    }
+                    new AlertDialog.Builder(this)
+                            .setTitle(getString(R.string.album_move_title, asset.fileName))
+                            .setItems(labels, (d, which) -> movePhotoInto(asset, targets.get(which)))
+                            .show();
+                });
+            } catch (ApiException e) {
+                runOnUiThread(() -> Ui.toastLong(this, e.getMessage()));
+            }
+        }).start();
+    }
+
+    /**
+     * ★先加、后移★
+     *
+     * 顺序反过来的话，中间任何一步失败（网断、超时、服务重启）都会让照片
+     * 处于「已经从原相册移出、还没进新相册」的状态 —— 也就是彻底隐身。
+     * 先加进目标相册再移出原相册，最坏情况也只是它同时待在两个相册里，
+     * 而这是 App 里看得见、能再修的状态。
+     */
+    private void movePhotoInto(Asset asset, Album target) {
+        new Thread(() -> {
+            try {
+                api.albumItems(target.id, java.util.Collections.singletonList(asset.id), false);
+                api.albumItems(album.id, java.util.Collections.singletonList(asset.id), true);
+                runOnUiThread(() -> {
+                    Ui.toast(this, getString(R.string.album_moved_to, target.name));
+                    load();
+                });
+            } catch (ApiException e) {
+                runOnUiThread(() -> Ui.toastLong(this,
+                        getString(R.string.album_move_failed) + e.getMessage()));
+            }
+        }).start();
     }
 
     // ------------------------------------------------------------ 适配器
