@@ -80,8 +80,32 @@ F:\树莓派开发\
 └── tools\
     ├── pi-run.ps1                    ← 在树莓派上执行一段脚本
     ├── fix-ps1-bom.ps1               ← 修 .ps1 的 UTF-8 BOM（中文脚本跑不起来先跑它）
-    └── verify-app-contract.ps1       ← 验证 App 与服务器的接口契约
+    ├── verify-app-contract.ps1       ← 验证 App 与服务器的接口契约
+    └── upload-to-album.py            ← 把本机文件批量传到某个相册（爬下来的视频用它）
 ```
+
+### 批量上传本机文件（`tools/upload-to-album.py`）
+
+爬虫把文件下到本机 `downloads\`，而相册在树莓派上，从手机一个个分享太慢。
+这个脚本走的是 App 上传时那套接口，**一次调用就把整批放进同一个相册**：
+
+```bash
+python tools\upload-to-album.py --parent Patreon --album Erovirus downloads\*.mp4
+
+# 想严格按命令行给的顺序排（而不是按文件名自然序）：加 --order given
+# 只想看看会传什么：加 --dry-run
+```
+
+它做对的几件事：
+
+| 点 | 说明 |
+|---|---|
+| 相册 | `--album` 不存在就新建，`--parent` 指定挂在哪个相册下；已存在就直接复用 |
+| 归属 | 上传时带上 `album_id`，**入库瞬间就在目标相册里**，不用事后再归一次 |
+| 批次 | 整批共用一个 `batch_id`，在列表里聚在一起，而不是按完成时间打散 |
+| 断点续传 | 分片偏移跟服务端对不上时，按服务端给的偏移 `seek` 回去接着传；重跑脚本安全 |
+| 秒传 | 先本地算 SHA-256 让它预检；服务器已有同一份就秒传，并且**补一次「加入相册」**（init 这条路径不会顺手归相册，这是个容易漏的坑） |
+| 安全 | 只上传，不删除任何东西；口令从 `photoalbum/deploy/local.env` 或环境变量读，不写进代码 |
 
 ---
 
