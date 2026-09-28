@@ -524,16 +524,87 @@ def enqueue_missing_thumbs() -> int:
     return queued
 
 
+def enqueue_missing_proxies() -> int:
+    """把「代理还没做完」的视频重新排进队列。返回排队数。
+
+    ★为什么必须有这一步★
+    代理任务和缩略图任务共用同一个内存队列，重启就清空。
+    缩略图那条路有 enqueue_missing_thumbs() 兜底，代理这条本来没有，
+    而视频的**缩略图早就是 ready 了** —— enqueue_missing_thumbs() 一看到
+    ready 就直接跳过，压根走不到 process_asset 里那段 enqueue(kind="proxy")。
+    结果就是「转码转一半被重启打断」的视频（proxy_state 停在 pending/running、
+    has_proxy 还是 0）永远卡在那儿，谁也不管。
+    这个坑真踩过：961、962 两个 1080p 视频一直 pending，手机上只能直连
+    170MB/198MB 的原片硬播。
+    所以这里跟缩略图对称地补一遍。代理只是「播得顺不顺」的后台优化，
+    补不上也不该影响服务启动，所以调用处吞异常。
+    """
+    if not (process_video_enabled() and auto_proxy()):
+        return 0
+    queued = 0
+    for row in db.query(
+        "SELECT id, proxy_state, has_proxy, height FROM assets "
+        "WHERE media_type='video' AND is_trashed=0"
+    ):
+        aid = int(row["id"])
+        height = row["height"]
+        # 没探到分辨率（height 为空）的交给缩略图任务去决定，这里别抢
+        if not height or height <= config.VIDEO_PROXY_MAX_HEIGHT:
+            continue
+        # 状态说做好了、文件也真在，才算数（缓存被清过就重新做）
+        if row["has_proxy"] and proxy_path(aid).exists():
+            # 文件在、状态却停在 running/pending 的，是「转码途中被重启杀掉」留下的脏标签。
+            # has_proxy 已经是 1，所以播放完全不受影响，但标签得纠正回来 ——
+            # 否则 /api/assets 会永远报「正在转码」，让人以为后台卡住了。
+            if row["proxy_state"] != "ready":
+                db.execute("UPDATE assets SET proxy_state='ready' WHERE id=?", (aid,))
+            continue
+        if row["proxy_state"] not in ("pending", "running"):
+            db.execute("UPDATE assets SET proxy_state='pending', has_proxy=0 WHERE id=?", (aid,))
+        enqueue(aid, kind="proxy")
+        queued += 1
+    if queued:
+        log.info("startup: re-queued %d videos with missing proxies", queued)
+    return queued
+
+
+def cleanup_stale_proxy_parts() -> int:
+    """清掉转码留下的一堆 `*.mp4.part`。返回删掉的字节数。
+
+    `make_proxy` 自己会在失败时删掉半成品，但 systemd 重启/断电会把进程直接杀掉，
+    那段清理代码根本没机会跑（实测 959 留下 22MB 的 959.mp4.part 一直躺着）。
+    启动时 worker 还没开始转码，所以此刻代理目录里任何 `*.mp4.part` 都必然是死文件。
+    """
+    proxy_dir = config.cache_dir() / "proxy"
+    if not proxy_dir.is_dir():
+        return 0
+    freed = 0
+    for stale in proxy_dir.glob("*.mp4.part"):
+        try:
+            freed += stale.stat().st_size
+            stale.unlink()
+        except OSError:
+            pass
+    if freed:
+        log.info("startup: removed %d bytes of stale proxy parts", freed)
+    return freed
+
+
 def start_worker() -> None:
     global _worker, _running
     if _worker and _worker.is_alive():
         return
     _running = True
-    # 先把上次没做完/丢掉的缩略图任务补排上，再启动消费线程
+    # 先把上次没做完/丢掉的缩略图和代理任务补排上，再启动消费线程
     try:
         enqueue_missing_thumbs()
     except Exception:  # noqa: BLE001
         log.exception("startup: enqueue_missing_thumbs 失败（不影响服务启动）")
+    try:
+        cleanup_stale_proxy_parts()
+        enqueue_missing_proxies()
+    except Exception:  # noqa: BLE001
+        log.exception("startup: enqueue_missing_proxies 失败（不影响服务启动）")
     _worker = threading.Thread(target=_loop, name="media-worker", daemon=True)
     _worker.start()
     log.info("media worker started")

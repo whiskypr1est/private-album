@@ -65,8 +65,12 @@ F:\树莓派开发\
 │   │   │   ├── config.py             ← 路径与配置
 │   │   │   └── util.py               ← 哈希 / 时间 / 文件名处理
 │   │   ├── scripts\
-│   │   │   ├── e2e_test.py           ← 接口端到端测试（71 项）
-│   │   │   └── e2e_video_test.py     ← 视频/HEIC 专项测试（需要 ffmpeg）
+│   │   │   ├── e2e_test.py           ← 接口端到端测试（73 项）
+│   │   │   ├── e2e_video_test.py     ← 视频/HEIC 专项测试（需要 ffmpeg，41 项）
+│   │   │   ├── e2e_album_tree_test.py  ← 子相册嵌套 / 移动 / 删除（35 项）
+│   │   │   ├── e2e_upload_order_test.py ← 指定上传顺序（14 项）
+│   │   │   ├── e2e_sort_test.py      ← 文件名自然排序（23 项）
+│   │   │   └── group_under_patreon.py ← 一次性脚本：把已有相册归到一个大相册下
 │   │   └── requirements.txt
 │   └── deploy\
 │       ├── push.ps1                  ← 本机一键上传+部署
@@ -315,9 +319,9 @@ id ASC              ← 兜底，保证稳定
 
 **1. 父相册不「聚合」子相册的照片，只做容器。**
 
-打开 `Patreon` 看到的是它的 6 个子相册，而不是 536 张混在一起的照片。
+打开 `Patreon` 看到的是它的 7 个子相册，而不是 543 张混在一起的照片。
 每个相册的 `count` 是**直接**包含的照片数，另有 `total_count` 表示含所有后代的合计。
-列表里显示成「6 个子相册 · 536 张」。
+列表里显示成「7 个子相册 · 543 张」。
 
 这样做的理由：同一张照片不会在多处重复出现，翻页游标也只需处理一层。
 （如果你想要「父相册显示全部子孙照片」，改动点只在 `album_detail` 的 `items` 查询，
@@ -424,7 +428,7 @@ venv/bin/python server/scripts/group_under_patreon.py
 
 ## 九、测试
 
-### 接口端到端测试（71 项）
+### 接口端到端测试（73 项）
 
 ```bash
 ssh 到树莓派后：
@@ -437,7 +441,7 @@ venv/bin/python server/scripts/e2e_test.py
 收藏/标签、相册增删改查与封面、分享链接（含免登录访问与过期）、回收站、
 媒体库统计与一致性校验、迁移预演、错误码（404/415/422）。
 
-### 视频与 HEIC 专项测试（25 项）
+### 视频与 HEIC 专项测试（41 项）
 
 ```bash
 venv/bin/python server/scripts/e2e_video_test.py
@@ -445,21 +449,42 @@ venv/bin/python server/scripts/e2e_video_test.py
 
 覆盖：MP4 上传、时长/分辨率解析、ffmpeg 抽帧缩略图、
 **HTTP Range 流（206 / Content-Range / 中间区间 / 后缀区间 bytes=-N / 开放区间 / 416 越界）**、
-视频裁剪（流复制）、1080p 自动转 720p 代理、`?original=1` 强制原片、HEIC（iPhone 照片）上传与缩略图。
+视频裁剪（流复制）、1080p 自动转 720p 代理、`?original=1` 强制原片、HEIC（iPhone 照片）上传与缩略图、
+以及**非 ASCII 文件名的回归**（弯引号 `’`、中文、ASCII 基线三种，逐年踩过的 500/422 就是这条守住）。
 
-### 本机侧契约测试（35 项）
+### 子相册嵌套测试（35 项）
+
+```bash
+venv/bin/python server/scripts/e2e_album_tree_test.py
+```
+
+覆盖：任意深度的嵌套、面包屑、整棵子树的计数、把父相册移进自己的子孙里必须被 400 拒绝、
+子相册移走后同样的操作又变合法（证明 400 不是误伤）、删除父相册时子相册上提而不是被连带删掉。
+
+### 指定上传顺序测试（14 项）
+
+```bash
+venv/bin/python server/scripts/e2e_upload_order_test.py
+```
+
+覆盖：按用户选定的文件夹顺序给 `order_index`、成批上传的排序锁定（`sort_key_locked`）、
+后续补传不会打乱已锁定的顺序。
+
+### 本机侧契约测试（50 项）
 
 ```powershell
-# 1. 开隧道
+# 方式一：直连（树莓派在 Tailscale 上可达时最省事）
+powershell -ExecutionPolicy Bypass -File "F:\树莓派开发\tools\verify-app-contract.ps1" -Base "http://100.82.85.15:8080"
+
+# 方式二：开隧道（默认 -Base 就是 18080）
 ssh -N -L 18080:127.0.0.1:8080 <用户名>@<树莓派地址>
-# 2. 另开一个窗口
 powershell -ExecutionPolicy Bypass -File "F:\树莓派开发\tools\verify-app-contract.ps1"
 ```
 
 它用本机的 .NET HTTP 栈原样复刻安卓 App 会发出的请求（同样的 URL 形态、查询参数、
 请求头、分片偏移），在没有真机的情况下验证接口契约。
 
-### 排序 / 批量上传 / 相册归属专项测试（20 项）
+### 排序 / 批量上传 / 相册归属专项测试（23 项）
 
 ```bash
 venv/bin/python server/scripts/e2e_sort_test.py
@@ -473,16 +498,27 @@ venv/bin/python server/scripts/e2e_sort_test.py
 
 | 测试 | 结果 |
 |---|---|
-| `e2e_test.py` | **71 项通过 / 0 项失败** |
-| `e2e_sort_test.py` | **20 项通过 / 0 项失败** |
-| `e2e_video_test.py` | **25 项通过 / 0 项失败** |
-| `verify-app-contract.ps1` | **35 项通过 / 0 项失败** |
+| `e2e_test.py` | **73 项通过 / 0 项失败** |
+| `e2e_video_test.py` | **41 项通过 / 0 项失败** |
+| `e2e_album_tree_test.py` | **35 项通过 / 0 项失败** |
+| `e2e_upload_order_test.py` | **14 项通过 / 0 项失败** |
+| `e2e_sort_test.py` | **23 项通过 / 0 项失败** |
+| `verify-app-contract.ps1` | **50 项通过 / 0 项失败** |
 
-合计 **151 项**，全部在真实服务上跑通。
+合计 **236 项**，全部在真实服务上跑通。
+
+> 套件要连真实服务，口令从环境变量读（仓库里没有明文口令）：
+> `sudo -u cabbage env PHOTOALBUM_PASSWORD='...' ./venv/bin/python server/scripts/e2e_test.py`
+> —— 不带这个变量会以空口令登录，报 `401 用户名或密码错误`，
+> 看上去像「登录功能坏了」，其实只是没给口令。
+>
+> 另外别把几个套件背靠背挤在一起跑：它们是同一个库上的真实读写，
+> 偶尔会互相干扰出一条假失败（本次 `e2e_sort_test.py` 就这样报过一次 22/23，
+> 单独重跑就是 23/23）。判断回归要看**单独重跑**的结果。
 
 三个 Python 套件和契约测试都改成了「只删自己造出来的产物」。验证方式：
-连跑两次契约测试，两次都是 **35/35**、收尾报告「删除本次测试产物 1 个；库里剩余资源 0 个」，
-且跑完 `assets` 表 0 行、`media` 目录 0 文件、用户相册 `JW1111` 完好无损 ——
+连跑两次契约测试，两次都是满分、收尾报告「删除本次测试产物 1 个；未动用全局清空回收站」，
+且跑完库里资源数不变、用户相册完好无损 ——
 说明清理逻辑既能清干净自己，又不再有全局破坏性动作。
 
 测试过程中发现并修掉的真问题（记录在案，避免重犯）：
@@ -505,6 +541,10 @@ venv/bin/python server/scripts/e2e_sort_test.py
 | `.ps1` 脚本突然**语法报错**：`Unexpected token '}'`、`An empty pipe element is not allowed` | Windows PowerShell 5.1 把**没有 UTF-8 BOM** 的 `.ps1` 当 ANSI(GBK) 读，文件里的中文全变乱码，解析器被带崩。编辑器/AI 工具把文件另存成「UTF-8 无 BOM」就会触发 | 新增 `tools/fix-ps1-bom.ps1`，扫全目录给漏 BOM 的脚本补上；本次一口气修好 8 个（含 6 个 `vision\*.ps1`） |
 | 契约测试报「`items` 是数组」失败，但服务器返回明明是对的 | PowerShell 里 `@() -ne $null` 的结果是**被过滤后的空数组**（假值），库里没照片时 `items: []` 就被误判成失败 | 改判「字段是否存在」：新增 `Has-Prop` / `Is-ArrayProp`，空数组也算通过 |
 | 同一张 `_原图.jpg` 反复跑测试却一直清不掉 | `upsert_asset` 按**文件路径**去重，同路径第二次是 UPDATE 不是 INSERT，行 id 不变，用「id 比基线新」永远匹配不到 | 清理函数额外接受一份「已知测试文件名」清单，精确相等也允许删 |
+| 导入视频后 App 网格长时间一片**灰格子** | 缩略图和代理共用**一个** worker、串行 FIFO，转一个 1080p 要几分钟，排在后面的缩略图任务被整体堵死（实测有视频的缩略图等了十几分钟） | `_loop()` 里让非代理任务（缩略图）**插队**：`idx = next(i for i, item in enumerate(_queue) if item[1] != "proxy")` |
+| 视频**永远**卡在 `proxy_state=pending`，谁也不管 | 重启后 `enqueue_missing_thumbs()` 会补排缩略图，但**代理没有对应的兜底**；而视频的缩略图早就是 `ready`，那个函数一看 ready 就跳过，根本走不到 `process_asset` 里 `enqueue(kind="proxy")` 那一行 —— 转码转一半被重启打断的视频就此永久搁浅（实测 961/962 两个 1080p 一直 pending，手机只能直连 170MB 原片硬播） | 新增 `enqueue_missing_proxies()`，在 `start_worker()` 里跟着一起调；判定条件是「分辨率高于阈值 且 (没代理 或 代理文件不在) 且 状态不是 ready」，并把 `running` 也当成「被中断」一并补排 |
+| 视频传上去了，但手机 App 里**一个都看不到** | 这 7 个视频**不属于任何相册**。App 的首页只有「相册 / 收藏 / 更多」三个页签，没有「全部照片」，所以「在库里但没有相册归属」的资源在 App 里等于隐身（`/api/assets` 里明明排在最前面） | 建了子相册 `H69 Verse`（挂在 `Patreon` 下）并把 7 个视频放进去；排查同类问题的口诀：**App 看不到 = 先查 `album_items` 里有没有它**，而不是先怀疑缩略图或转码 |
+| 手写脚本查「视频有没有相册」时全报「无相册」 | `/api/assets` 的过滤参数叫 **`type`**（`Query(alias="type")`）而不是 `media_type`；写成 `?media_type=video` 时 FastAPI 不认这个参数、**静默忽略**，于是返回全部资源，脚本把它全当成视频，自然个个「无相册」 | 查库时用 `?type=video`；判断「有没有这个参数」别靠返回数量猜，先确认参数名 |
 
 ### ⚠️ 测试脚本安全约定（务必遵守）
 
